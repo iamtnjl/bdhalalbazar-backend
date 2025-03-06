@@ -5,6 +5,8 @@ const helmet = require("helmet");
 const compression = require("compression");
 const morgan = require("morgan");
 const connectDB = require("./config/db");
+const { protect, adminProtect } = require("../src/middlewares/auth");
+// const chalk = require("chalk");
 
 // Initialize Express App
 const app = express();
@@ -25,9 +27,8 @@ app.get("/", (req, res) => {
 });
 
 // Routes
-app.use("/api/users", require("./routes/userRoutes"));
-// app.use("/api/products", require("./routes/productRoutes"));
-// app.use("/api/orders", require("./routes/orderRoutes"));
+app.use("/api/auth", require("./routes/userRoutes"));
+app.use("/api/me", protect, require("../src/routes/meRoutes"));
 
 // Global Error Handler
 app.use((err, req, res, next) => {
@@ -37,4 +38,7 @@ app.use((err, req, res, next) => {
 
 // Start Server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, async () => {
+  const { default: chalk } = await import("chalk");
+  console.log(chalk.green.bold(`Server is running on port ${PORT} 🚀`));
+});
