@@ -3,7 +3,9 @@ const Brand = require("../models/BrandModel");
 const Material = require("../models/materialModel");
 const Category = require("../models/categoryModel");
 const Color = require("../models/colorModel");
-const paginate = require("../utils/pagination")
+const paginate = require("../utils/pagination");
+const cloudinary = require("../config/cloudinary");
+
 
 const createProduct = async (req, res) => {
   try {
@@ -15,32 +17,25 @@ const createProduct = async (req, res) => {
       materials,
       categories,
       colors,
-      primary_image,
-      images,
       status,
+      stock,
+      orderable_stock,
       is_published,
       ad_pixel_id,
+      manufacturer,
     } = req.body;
 
-    // Validate if primary_image is provided
-    if (!primary_image) {
-      return res.status(400).json({ error: "Primary image is required" });
-    }
+    console.log({ bode: req.body, file: req.file });
 
-    // Fetch brand, category, and material IDs from slugs
-    // const brandDocs = await Brand.find({ slug: { $in: brand } }).select("_id");
-    const brandDocs = await Brand.find({
-      slug: { $in: brand },
-    }).select("_id");
+    // Fetch brand, category, material, and color IDs from slugs
+    const brandDocs = await Brand.find({ slug: { $in: brand } }).select("_id");
     const categoryDocs = await Category.find({
       slug: { $in: categories },
     }).select("_id");
     const materialDocs = await Material.find({
       slug: { $in: materials },
     }).select("_id");
-    const colorDocs = await Color.find({
-      slug: { $in: colors },
-    }).select("_id");
+    const colorDocs = await Color.find({ slug: { $in: colors } }).select("_id");
 
     // Validate if all provided slugs exist
     if (
@@ -58,16 +53,13 @@ const createProduct = async (req, res) => {
     let primaryImage = {};
     let multipleImages = [];
 
-    // Handle primary image upload (single image)
+    // Handle single primary image upload
     if (req.files && req.files.primary_image) {
       const primaryImageUpload = await cloudinary.uploader.upload(
         req.files.primary_image[0].path,
-        {
-          folder: "product_images",
-        }
+        { folder: "product_images" }
       );
 
-      // Generate other image sizes for primary image
       const thumbnail = await cloudinary.uploader.upload(
         req.files.primary_image[0].path,
         {
@@ -91,17 +83,14 @@ const createProduct = async (req, res) => {
       };
     }
 
-    // Handle multiple images upload
+    // Handle multiple image uploads
     if (req.files && req.files.images) {
       for (let i = 0; i < req.files.images.length; i++) {
         const imageUpload = await cloudinary.uploader.upload(
           req.files.images[i].path,
-          {
-            folder: "product_images",
-          }
+          { folder: "product_images" }
         );
 
-        // Generate other image sizes for each image
         const thumbnail = await cloudinary.uploader.upload(
           req.files.images[i].path,
           {
@@ -126,6 +115,7 @@ const createProduct = async (req, res) => {
       }
     }
 
+    // Create the product
     const product = new Product({
       name,
       price,
@@ -139,6 +129,9 @@ const createProduct = async (req, res) => {
       status,
       is_published,
       ad_pixel_id,
+      stock,
+      orderable_stock,
+      manufacturer,
     });
 
     await product.save();
@@ -154,7 +147,7 @@ const getAllProducts = async (req, res) => {
 
     // Search by name
     if (req.query.search) {
-      query.name = { $regex: req.query.search, $options: "i" }; // Case-insensitive search
+      query.name = { $regex: req.query.search, $options: "i" };
     }
 
     // Filtering by price range
@@ -164,38 +157,78 @@ const getAllProducts = async (req, res) => {
       if (req.query.maxPrice) query.price.$lte = parseFloat(req.query.maxPrice);
     }
 
-    // Filtering by brand, categories, materials, colors (expects comma-separated values)
-    if (req.query.brand) query.brand = { $in: req.query.brand.split(",") };
-    if (req.query.categories)
-      query.categories = { $in: req.query.categories.split(",") };
-    if (req.query.materials)
-      query.materials = { $in: req.query.materials.split(",") };
-    if (req.query.colors) query.colors = { $in: req.query.colors.split(",") };
+    // Function to convert a comma-separated string into an array
+    const convertToArray = (value) => value.split(",");
+
+    // Function to fetch ObjectIds from slugs
+    const fetchObjectIds = async (Model, slugs) => {
+      const items = await Model.find({ slug: { $in: slugs } }, "_id");
+      return items.map((item) => item._id);
+    };
+
+    // Unified filtering for brand, categories, materials, and colors (using slugs)
+    const applySlugFilter = async (field, model) => {
+      if (req.query[field]) {
+        const slugs = convertToArray(req.query[field]);
+        const ids = await fetchObjectIds(model, slugs);
+        query[field] = { $in: ids };
+      }
+    };
+
+    // Apply filters for brand, categories, materials, and colors
+    await applySlugFilter("brand", Brand);
+    await applySlugFilter("categories", Category);
+    await applySlugFilter("materials", Material);
+    await applySlugFilter("colors", Color);
+
+    // Sorting logic
+    let sort = {};
+    if (req.query.sort_by) {
+      switch (req.query.sort_by) {
+        case "price_asc":
+          sort = { price: -1 };
+          break;
+        case "price_desc":
+          sort = { price: 1 };
+          break;
+        case "newest":
+          sort = { createdAt: -1 };
+          break;
+        case "oldest":
+          sort = { createdAt: 1 };
+          break;
+        default:
+          sort = { createdAt: -1 };
+          break;
+      }
+    }
 
     // Get paginated results with populated fields
     const paginatedData = await paginate(
       Product,
       query,
       req,
-      ["brand", "materials", "categories", "colors"] // Populating necessary fields
+      ["brand", "materials", "categories", "colors"],
+      sort
     );
 
-    // Add discount calculation to results
+    // Discount calculation
     const calculateDiscount = (product) => {
-      return (product.price - (product.price * product.discount) / 100).toFixed(
-        2
-      );
+      const discountedPrice =
+        product.price - (product.price * product.discount) / 100;
+      return discountedPrice % 1 === 0
+        ? parseInt(discountedPrice)
+        : parseFloat(discountedPrice.toFixed(2));
     };
 
+    // Transform the results
     paginatedData.results = paginatedData.results.map((product) => ({
       _id: product._id,
       name: product.name,
       price: product.price,
       discount: product.discount,
       discounted_price: calculateDiscount(product),
-      brand: product.brand
-        ? { name: product.brand.name, slug: product.brand.slug }
-        : null,
+      brand: product.brand.map((b) => ({ name: b.name, slug: b.slug })),
       materials: product.materials.map((m) => ({ name: m.name, slug: m.slug })),
       categories: product.categories.map((c) => ({
         name: c.name,
@@ -208,6 +241,8 @@ const getAllProducts = async (req, res) => {
       is_published: product.is_published,
       createdAt: product.createdAt,
       updatedAt: product.updatedAt,
+      stock: product.stock,
+      orderable_stock: product.orderable_stock,
     }));
 
     res.status(200).json(paginatedData);
@@ -216,4 +251,74 @@ const getAllProducts = async (req, res) => {
   }
 };
 
-module.exports = { createProduct, getAllProducts };
+const getProductDetails = async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    // Fetch product with populated references
+    const product = await Product.findById(productId)
+      .populate("brand", "name")
+      .populate("materials", "name")
+      .populate("categories", "name")
+      .populate("colors", "name");
+
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    // Ensure price and discount follow the correct format
+    const price =
+      product.price % 1 === 0
+        ? parseInt(product.price)
+        : parseFloat(product.price.toFixed(2));
+    const discount =
+      product.discount % 1 === 0
+        ? parseInt(product.discount)
+        : parseFloat(product.discount.toFixed(2));
+
+    // Calculate discounted price
+    const discountedPrice =
+      product.price - (product.price * product.discount) / 100;
+    const formattedDiscountedPrice =
+      discountedPrice % 1 === 0
+        ? parseInt(discountedPrice)
+        : parseFloat(discountedPrice.toFixed(2));
+
+    // Ensure primary image is always the first in the images array
+    let images = product.images || [];
+    if (product.primary_image) {
+      images = [
+        product.primary_image,
+        ...images.filter(
+          (img) => img.original !== product.primary_image.original
+        ),
+      ];
+    }
+
+    // Send formatted response
+    res.status(200).json({
+      _id: product._id,
+      name: product.name,
+      price,
+      discount,
+      discounted_price: formattedDiscountedPrice,
+      stock_id: product.stock_id,
+      brand: product.brand,
+      materials: product.materials,
+      categories: product.categories,
+      colors: product.colors,
+      images,
+      status: product.status,
+      is_published: product.is_published,
+      stock: product.stock,
+      orderable_stock: product.orderable_stock,
+      ad_pixel_id: product.ad_pixel_id,
+      createdAt: product.createdAt,
+      updatedAt: product.updatedAt,
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+module.exports = { createProduct, getAllProducts, getProductDetails };

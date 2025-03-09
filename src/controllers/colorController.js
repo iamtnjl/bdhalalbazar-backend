@@ -14,7 +14,18 @@ const createColor = async (req, res) => {
 
 const getAllColors = async (req, res) => {
   try {
-    const paginatedData = await paginate(Color, {}, req);
+    let filter = {};
+
+    if (req.query.slugs) {
+      const slugsArray = req.query.slugs.split(",").map((slug) => slug.trim());
+      filter = { slug: { $in: slugsArray } };
+    }
+
+    if (req.query.search) {
+      filter.name = { $regex: req.query.search, $options: "i" }; 
+    }
+
+    const paginatedData = await paginate(Color, filter, req);
     res.status(200).json(paginatedData);
   } catch (error) {
     res.status(500).json({ error: error.message });

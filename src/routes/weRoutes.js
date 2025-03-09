@@ -1,4 +1,7 @@
 const express = require("express");
+const router = express.Router();
+const upload = require("../middlewares/multer")
+
 const { getAllUsers } = require("../controllers/userController");
 const { getAllBrands, createBrand } = require("../controllers/brandController");
 const { getAllColors, createColor } = require("../controllers/colorController");
@@ -15,7 +18,7 @@ const {
   getAllMaterials,
   createMaterial,
 } = require("../controllers/materialController");
-const router = express.Router();
+
 
 router.get("/", getAllUsers);
 
@@ -37,6 +40,13 @@ router.post("/colors", createColor);
 
 //Products API
 router.get("/products", getAllProducts);
-router.post("/products", createProduct);
+router.post(
+  "/products",
+  upload.fields([
+    { name: "primary_image", maxCount: 1 }, // Single image
+    { name: "images", maxCount: 5 }, // Multiple images (max 5)
+  ]),
+  createProduct
+);
 
 module.exports = router;
