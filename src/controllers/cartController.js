@@ -30,10 +30,10 @@ const addOrUpdateCart = async (req, res) => {
 
       if (productIndex !== -1) {
         if (quantity === 0) {
-          // 🛑 Remove item if quantity is 0
+          // Remove item if quantity is 0
           cart.cart_products.splice(productIndex, 1);
         } else {
-          // ✅ Update quantity & final price
+          //  Update quantity & final price
           cart.cart_products[productIndex].quantity = quantity;
           cart.cart_products[productIndex].final_price =
             quantity *
@@ -41,7 +41,7 @@ const addOrUpdateCart = async (req, res) => {
         }
       } else {
         if (quantity > 0) {
-          // ➕ Add product if it's not in cart & quantity > 0
+          //  Add product if it's not in cart & quantity > 0
           cart.cart_products.push({
             product: productId,
             quantity: quantity,
@@ -111,6 +111,15 @@ const getCart = async (req, res) => {
       return res.json({ message: "Cart is empty", cart: null });
     }
 
+    //  Explicitly setting final_price for each cart product
+    cart.cart_products = cart.cart_products.map((item) => {
+      const discounted_price =
+        item.product?.price -
+        (item.product?.price * item.product?.discount) / 100;
+      item.final_price = discounted_price * item.quantity;
+      return item;
+    });
+
     cart.sub_total = cart.cart_products.reduce(
       (sum, item) => sum + (item.product?.price || 0) * item.quantity,
       0
@@ -133,6 +142,7 @@ const getCart = async (req, res) => {
     await cart.save();
 
     res.json({
+      _id: cart._id,
       cart_products: cart.cart_products,
       sub_total: cart.sub_total,
       discount: cart.discount,

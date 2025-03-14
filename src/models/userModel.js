@@ -32,7 +32,7 @@ const userSchema = new mongoose.Schema(
       unique: true,
       match: [/^\+?[1-9]\d{1,14}$/, "Please enter a valid phone number"],
     },
-    password: { type: String, required: true },
+    password: { type: String },
     role: { type: String, enum: ["user", "admin"], default: "user" },
     address: { type: [addressSchema], default: [] },
     lastLogin: { type: Date, default: null },

@@ -15,6 +15,8 @@ const {
   deleteCartItem,
 } = require("../controllers/cartController");
 
+const { placeOrder } = require("../controllers/orderController");
+
 //Tags API
 router.get("/brands", getAllBrands);
 router.get("/materials", getAllMaterials);
@@ -29,5 +31,8 @@ router.get("/products/:productId", getProductDetails);
 router.get("/cart", getCart);
 router.post("/cart", addOrUpdateCart);
 router.delete("/cart/:productId", deleteCartItem);
+
+//Place order API
+router.post("/order", placeOrder);
 
 module.exports = router;
