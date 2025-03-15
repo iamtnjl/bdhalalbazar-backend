@@ -15,8 +15,8 @@ const userSchema = new mongoose.Schema(
     email: {
       type: String,
       required: false,
+      unique:false,
       trim: true,
-      unique: true,
       sparse: true,
       lowercase: true,
       validate: {
@@ -30,7 +30,6 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
-      match: [/^\+?[1-9]\d{1,14}$/, "Please enter a valid phone number"],
     },
     password: { type: String },
     role: { type: String, enum: ["user", "admin"], default: "user" },
