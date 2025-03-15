@@ -16,7 +16,7 @@ app.use(express.json()); // Parse JSON
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded data
 app.use(
   cors({
-    origin: ["https://halalbazar.net"],
+    origin: ["https://halalbazar.net", "http://localhost:3000"],
   })
 ); // Allow cross-origin requests
 app.use(helmet()); // Secure HTTP headers
