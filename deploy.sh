@@ -1,18 +1,22 @@
 #!/bin/bash
-set -e
- 
-echo "Deployment started..."
+set -e  # Exit immediately if a command exits with a non-zero status
 
-echo "Pull latest changes from main branch..."
-git pull origin main
- 
-echo "Installing Dependencies..."
-npm install --yes
+LOG_FILE="deployment.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
-echo "Ensuring tmp directory exists..."
-mkdir -p tmp || { echo "Error: Failed to create tmp directory"; exit 1; }
+echo "=============================="
+echo "Deployment started at $(date)"
+echo "=============================="
+
+
+echo "Pulling latest changes from main branch..."
+git pull origin main || { echo "Error: Git pull failed"; exit 1; }
+
+echo "Installing dependencies..."
+npm install --yes || { echo "Error: Dependency installation failed"; exit 1; }
+
 
 echo "Restarting Passenger..."
 touch tmp/restart.txt || { echo "Error: Failed to restart Passenger"; exit 1; }
- 
-echo "Deployment Completed Successfully!"
+
+echo "Deployment completed successfully at $(date)"
