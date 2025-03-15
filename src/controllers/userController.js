@@ -19,9 +19,7 @@ const registerUser = async (req, res) => {
     // Check if user already exists
     const normalizedEmail = email?.trim().toLowerCase();
     let existingUser;
-    if (email) {
-      existingUser = await User.findOne({ email: normalizedEmail });
-    } else if (phone) {
+    if (phone) {
       existingUser = await User.findOne({ phone });
     }
 
