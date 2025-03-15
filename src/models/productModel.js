@@ -1,5 +1,8 @@
 const mongoose = require("mongoose");
-const shortid = require("shortid");
+
+async function generateId() {
+  const { nanoid } = await import("nanoid");
+}
 
 const ImageSchema = new mongoose.Schema({
   original: { type: String },
@@ -22,7 +25,7 @@ const ProductSchema = new mongoose.Schema(
       set: (val) => parseFloat(val).toFixed(2),
       get: (val) => (val % 1 === 0 ? parseInt(val) : parseFloat(val)),
     },
-    stock_id: { type: String, default: shortid.generate, unique: true },
+    stock_id: { type: String, default: generateId(), unique: true },
     brand: [
       {
         type: mongoose.Schema.Types.ObjectId,

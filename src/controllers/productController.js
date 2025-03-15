@@ -1,5 +1,5 @@
 const Product = require("../models/productModel");
-const Brand = require("../models/BrandModel");
+const Brand = require("../models/brandModel");
 const Material = require("../models/materialModel");
 const Category = require("../models/categoryModel");
 const Color = require("../models/colorModel");

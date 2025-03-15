@@ -1,4 +1,4 @@
-const Brand = require("../models/BrandModel");
+const Brand = require("../models/brandModel");
 const paginate = require("../utils/pagination");
 
 const createBrand = async (req, res) => {
