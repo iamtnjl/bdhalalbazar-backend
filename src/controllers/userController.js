@@ -117,10 +117,6 @@ const loginUser = async (req, res) => {
   res.json({ access: accessToken, refresh: refreshToken });
 };
 
-const getUserData = (req, res) => {
-  res.json({ user: req.user });
-};
-
 const getAllUsers = async (req, res) => {
   try {
     const users = await User.find();
@@ -130,4 +126,8 @@ const getAllUsers = async (req, res) => {
   }
 };
 
-module.exports = { registerUser, loginUser, getUserData, getAllUsers };
+module.exports = {
+  registerUser,
+  loginUser,
+  getAllUsers,
+};

@@ -1,10 +1,19 @@
 const express = require("express");
-const { getUserData } = require("../controllers/userController");
-const { getAddresses } = require("../controllers/meController");
-const { getOrders, getOrderDetails } = require("../controllers/orderController");
 const router = express.Router();
 
+const {
+  getAddresses,
+  updateUser,
+  getUserData,
+} = require("../controllers/meController");
+
+const {
+  getOrders,
+  getOrderDetails,
+} = require("../controllers/orderController");
+
 router.get("/", getUserData);
+router.patch("/", updateUser);
 router.get("/addresses", getAddresses);
 
 //Order API
