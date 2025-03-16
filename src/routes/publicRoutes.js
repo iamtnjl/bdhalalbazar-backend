@@ -30,7 +30,7 @@ router.get("/products/:productId", getProductDetails);
 //Cart API
 router.get("/cart", getCart);
 router.post("/cart", addOrUpdateCart);
-router.delete("/cart/:productId", deleteCartItem);
+router.delete("/cart/:deviceId/product/:productId", deleteCartItem);
 
 //Place order API
 router.post("/order", placeOrder);

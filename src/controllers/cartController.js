@@ -173,27 +173,34 @@ const getCart = async (req, res) => {
 
 const deleteCartItem = async (req, res) => {
   try {
-    const { productId } = req.params;
+    const { deviceId, productId } = req.params; // Extract deviceId and productId
 
-    if (!productId) {
-      return res.status(400).json({ message: "Product ID is required" });
+    if (!deviceId || !productId) {
+      return res
+        .status(400)
+        .json({ message: "Device ID and Product ID are required" });
     }
 
-    let cart = await Cart.findOne();
+    // Find the cart associated with the deviceId
+    let cart = await Cart.findOne({ deviceId }); // Find cart by deviceId
     if (!cart) {
-      return res.status(404).json({ message: "Cart not found" });
+      return res
+        .status(404)
+        .json({ message: "Cart not found for this device" });
     }
 
-    // Find the product index
+    // Find the product index in the cart
     const productIndex = cart.cart_products.findIndex(
       (item) => item.product.toString() === productId
     );
 
     if (productIndex === -1) {
-      return res.status(404).json({ message: "Product not found in cart" });
+      return res
+        .status(404)
+        .json({ message: "Product not found in this cart" });
     }
 
-    // Remove the product from cart
+    // Remove the product from the cart
     cart.cart_products.splice(productIndex, 1);
 
     // Recalculate totals
@@ -203,11 +210,15 @@ const deleteCartItem = async (req, res) => {
     );
 
     cart.discount = cart.cart_products.reduce((sum, item) => {
-      const discounted_price =
-        item.product?.price -
-        (item.product?.price * item.product?.discount) / 100;
-      const discount = item.product?.price - discounted_price;
+      const productPrice = item.product?.price || 0; // Default to 0 if price is undefined
+      const productDiscount = item.product?.discount || 0; // Default to 0 if discount is undefined
 
+      // Calculate discounted price and discount amount
+      const discounted_price =
+        productPrice - (productPrice * productDiscount) / 100;
+      const discount = productPrice - discounted_price;
+
+      // Add the discount amount for the current product to the total sum
       return sum + discount * item.quantity;
     }, 0);
 
