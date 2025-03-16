@@ -3,11 +3,19 @@ const Product = require("../models/productModel");
 
 const addOrUpdateCart = async (req, res) => {
   try {
-    let products = Array.isArray(req.body) ? req.body : [req.body]; // Ensure input is an array
+    const deviceId = req.body.deviceId;
+    if (!deviceId) {
+      return res.status(400).json({ message: "deviceID is required" });
+    }
 
-    let cart = await Cart.findOne();
+    let products = Array.isArray(req.body.cart)
+      ? req.body.cart
+      : [req.body.cart];
+
+    let cart = await Cart.findOne({ deviceId });
+
     if (!cart) {
-      cart = new Cart({ cart_products: [] });
+      cart = new Cart({ deviceId, cart_products: [] });
     }
 
     for (let { productId, quantity } of products) {
@@ -33,7 +41,7 @@ const addOrUpdateCart = async (req, res) => {
           // Remove item if quantity is 0
           cart.cart_products.splice(productIndex, 1);
         } else {
-          //  Update quantity & final price
+          // Update quantity & final price
           cart.cart_products[productIndex].quantity = quantity;
           cart.cart_products[productIndex].final_price =
             quantity *
@@ -41,7 +49,7 @@ const addOrUpdateCart = async (req, res) => {
         }
       } else {
         if (quantity > 0) {
-          //  Add product if it's not in cart & quantity > 0
+          // Add product if it's not in cart & quantity > 0
           cart.cart_products.push({
             product: productId,
             quantity: quantity,
@@ -84,6 +92,7 @@ const addOrUpdateCart = async (req, res) => {
     res.json({
       message: "Cart updated",
       cart: {
+        deviceId: cart.deviceId,
         cart_products: cart.cart_products,
         sub_total: cart.sub_total,
         discount: cart.discount,
@@ -97,7 +106,14 @@ const addOrUpdateCart = async (req, res) => {
 
 const getCart = async (req, res) => {
   try {
-    let cart = await Cart.findOne().populate({
+    const deviceId = req.query.deviceId;
+
+    // Validate that deviceId is provided
+    if (!deviceId) {
+      return res.status(400).json({ message: "Device ID is required" });
+    }
+
+    let cart = await Cart.findOne({ deviceId }).populate({
       path: "cart_products.product",
       populate: [
         { path: "brand", select: "name" },
@@ -108,10 +124,12 @@ const getCart = async (req, res) => {
     });
 
     if (!cart || cart.cart_products.length === 0) {
-      return res.json({ message: "Cart is empty", cart: null });
+      return res
+        .status(404)
+        .json({ message: "Cart not found for this device", cart: null });
     }
 
-    //  Explicitly setting final_price for each cart product
+    // Explicitly setting final_price for each cart product
     cart.cart_products = cart.cart_products.map((item) => {
       const discounted_price =
         item.product?.price -
@@ -120,6 +138,7 @@ const getCart = async (req, res) => {
       return item;
     });
 
+    // Calculate subtotal, discount, and grand total
     cart.sub_total = cart.cart_products.reduce(
       (sum, item) => sum + (item.product?.price || 0) * item.quantity,
       0
@@ -130,7 +149,6 @@ const getCart = async (req, res) => {
         item.product?.price -
         (item.product?.price * item.product?.discount) / 100;
       const discount = item.product?.price - discounted_price;
-
       return sum + discount * item.quantity;
     }, 0);
 
