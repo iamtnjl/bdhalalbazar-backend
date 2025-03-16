@@ -48,13 +48,6 @@ const placeOrder = async (req, res) => {
 
     if (!cart) return res.status(404).json({ message: "Cart not found" });
 
-    // Check if user exists; if not, create one
-    let user = await User.findOne({ phone });
-    if (!user) {
-      user = new User({ name, phone, status: "pending" });
-      await user.save();
-    }
-
     // Extract cart details for the order
     const orderItems = cart.cart_products.map((item) => ({
       _id: item.product._id,
@@ -177,7 +170,7 @@ const getOrders = async (req, res) => {
 //  Get Order Details
 const getOrderDetails = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.orderId )
+    const order = await Order.findById(req.params.orderId)
       .populate({
         path: "items._id",
         model: "Product",
