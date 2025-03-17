@@ -125,8 +125,8 @@ const getCart = async (req, res) => {
 
     if (!cart || cart.cart_products.length === 0) {
       return res
-        .status(404)
-        .json({ message: "Cart not found for this device", cart: null });
+        .status(200)
+        .json({ message: "Cart not found for this device", cart_products: null });
     }
 
     // Explicitly setting final_price for each cart product
