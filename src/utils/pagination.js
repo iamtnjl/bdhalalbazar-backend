@@ -1,31 +1,80 @@
 const paginate = async (
   model,
-  query,
+  query = {},
   req,
   populateFields = [],
-  sort = { createdAt: -1 }
+  sort = { createdAt: -1 },
+  aliasFields = {} // New: Field alias mapping (e.g., { "items._id": "items.product" })
 ) => {
+  if (!model || typeof model.countDocuments !== "function") {
+    throw new Error("Invalid model provided to pagination function.");
+  }
+
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.show) || 20;
   const skip = (page - 1) * limit;
 
-  // Sorting (Use "sort_by" from API)
-  let sort_by = sort;
-
+  // Count total documents
   const totalCount = await model.countDocuments(query);
 
-  // Fetch paginated results with sorting and optional population
-  let resultsQuery = model.find(query).skip(skip).limit(limit).sort(sort_by);
+  // Build query with sorting
+  let resultsQuery = model.find(query).skip(skip).limit(limit).sort(sort);
 
+  // Handle population (supports deep population like `items._id`)
   if (populateFields.length > 0) {
     populateFields.forEach((field) => {
-      resultsQuery = resultsQuery.populate(field);
+      // Check if an alias is provided for this field
+      const alias = aliasFields[field] || field;
+
+      if (field.includes("._id")) {
+        const parentField = field.split("._id")[0];
+
+        resultsQuery = resultsQuery.populate({
+          path: parentField, // Populate the entire parent field (e.g., `items`)
+          populate: {
+            path: "_id", // Inside `items`, populate `_id`
+            model: "Product", // Reference the `Product` model
+            select: "-__v", // Exclude unnecessary fields
+          },
+        });
+      } else {
+        resultsQuery = resultsQuery.populate(field);
+      }
     });
   }
 
-  const results = await resultsQuery;
+  // Execute query
+  let results = await resultsQuery.lean(); // Ensure results are plain JSON
 
-  // Construct pagination links
+  // Rename populated fields dynamically
+  results = results.map((doc) => {
+    let docObj = { ...doc };
+
+    Object.keys(aliasFields).forEach((originalField) => {
+      const alias = aliasFields[originalField];
+
+      if (originalField.includes("._id")) {
+        const parentField = originalField.split("._id")[0];
+
+        if (docObj[parentField] && Array.isArray(docObj[parentField])) {
+          docObj[parentField] = docObj[parentField].map((item) => {
+            if (item._id && typeof item._id === "object") {
+              return {
+                ...item,
+                [alias.split(".").pop()]: item._id, // Rename `_id` to `product`
+                _id: undefined, // Remove `_id`
+              };
+            }
+            return item;
+          });
+        }
+      }
+    });
+
+    return docObj;
+  });
+
+  // Generate pagination links
   const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
     req.path
   }`;

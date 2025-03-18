@@ -3,6 +3,7 @@ const Cart = require("../models/cartModel.js");
 const User = require("../models/userModel.js");
 const Product = require("../models/productModel.js");
 const mongoose = require("mongoose");
+const paginate = require("../utils/pagination.js");
 
 // Generate a unique Order ID
 const generateOrderId = () => {
@@ -167,6 +168,33 @@ const getOrders = async (req, res) => {
   }
 };
 
+const getAllOrders = async (req, res) => {
+  try {
+    // Extract filters from query params
+    const { status, order_id } = req.query;
+
+    let query = {};
+    // If order_id is provided, filter by order_id
+    if (order_id) {
+      query.order_id = order_id;
+    }
+
+    // If status filter is provided, filter by status.slug inside the status array
+    if (status) {
+      query["status.slug"] = status;
+    }
+
+    const paginatedData = await paginate(Order, query, req);
+
+    return res.status(200).json(paginatedData);
+  } catch (error) {
+    console.error(error);
+    return res
+      .status(500)
+      .json({ message: "An error occurred while fetching orders", error });
+  }
+};
+
 //  Get Order Details
 const getOrderDetails = async (req, res) => {
   try {
@@ -211,7 +239,8 @@ const updateOrderStatus = async (req, res) => {
     const { orderId } = req.params;
     const { newStatus } = req.body;
 
-    const order = await Order.findOne({ order_id: orderId });
+    const order = await Order.findOne({ _id: orderId });
+    console.log(orderId);
     if (!order) return res.status(404).json({ message: "Order not found" });
 
     let foundIndex = -1;
@@ -251,4 +280,10 @@ const updateOrderStatus = async (req, res) => {
   }
 };
 
-module.exports = { updateOrderStatus, placeOrder, getOrders, getOrderDetails };
+module.exports = {
+  updateOrderStatus,
+  placeOrder,
+  getOrders,
+  getOrderDetails,
+  getAllOrders,
+};
