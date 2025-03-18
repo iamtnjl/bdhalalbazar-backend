@@ -2,11 +2,9 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
 const addressSchema = new mongoose.Schema({
-  label: { type: String, required: false },
-  area: { type: String, required: true },
   street: { type: String, required: true },
-  district: { type: String, required: false },
-  division: { type: String, required: false },
+  city: { type: String, required: true },
+  zip: { type: String, required: true },
 });
 
 const userSchema = new mongoose.Schema(
@@ -15,7 +13,6 @@ const userSchema = new mongoose.Schema(
     email: {
       type: String,
       required: false,
-      unique:false,
       trim: true,
       sparse: true,
       lowercase: true,

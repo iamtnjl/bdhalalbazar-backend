@@ -10,11 +10,9 @@ const OrderSchema = new mongoose.Schema(
 
     // Address Structure
     address: {
-      label: { type: String, required: true },
       street: { type: String, required: true },
-      area: { type: String, required: true },
-      division: { type: String, required: true },
-      district: { type: String, required: true },
+      city: { type: String, required: true },
+      zip: { type: String, required: true },
     },
 
     // Reference to Cart Model for delivery charge

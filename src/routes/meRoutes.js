@@ -5,6 +5,7 @@ const {
   getAddresses,
   updateUser,
   getUserData,
+  addOrEditAddress,
 } = require("../controllers/meController");
 
 const {
@@ -15,6 +16,7 @@ const {
 router.get("/", getUserData);
 router.patch("/", updateUser);
 router.get("/addresses", getAddresses);
+router.post("/addresses", addOrEditAddress);
 
 //Order API
 router.get("/orders", getOrders);

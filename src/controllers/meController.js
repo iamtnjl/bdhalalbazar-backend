@@ -61,11 +61,58 @@ const updateUser = async (req, res) => {
     // Fetch latest data from DB to return
     const updatedUser = await Users.findById(userId);
 
-    res.status(200).json({ message: "User updated successfully", user: updatedUser });
+    res
+      .status(200)
+      .json({ message: "User updated successfully", user: updatedUser });
   } catch (error) {
     console.error("Error updating user:", error);
     res.status(500).json({ message: "Server error" });
   }
 };
 
-module.exports = { getUserData, getAddresses, updateUser };
+const addOrEditAddress = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { addressId, street, city, zip } = req.body;
+
+    if (!street || !city || !zip) {
+      return res
+        .status(400)
+        .json({ message: "All address fields are required" });
+    }
+
+    const user = await Users.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (addressId) {
+      // Edit existing address
+      const addressIndex = user.address.findIndex(
+        (addr) => addr._id.toString() === addressId
+      );
+      if (addressIndex === -1) {
+        return res.status(404).json({ message: "Address not found" });
+      }
+      user.address[addressIndex] = { _id: addressId, street, city, zip };
+    } else {
+      // Add new address
+      user.address.push({ street, city, zip });
+    }
+
+    await user.save();
+
+    res.status(200).json({
+      message: addressId
+        ? "Address updated successfully"
+        : "Address added successfully",
+      user,
+    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Internal server error", error: error.message });
+  }
+};
+
+module.exports = { getUserData, getAddresses, updateUser, addOrEditAddress };
