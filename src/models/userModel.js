@@ -2,9 +2,9 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
 const addressSchema = new mongoose.Schema({
-  street: { type: String, required: true },
-  city: { type: String, required: true },
-  zip: { type: String, required: true },
+  street: { type: String },
+  city: { type: String },
+  zip: { type: String },
 });
 
 const userSchema = new mongoose.Schema(
