@@ -41,9 +41,9 @@ const ProductSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: ["active", "draft", "pending"],
-      default: "draft",
+      default: "active",
     },
-    is_published: { type: Boolean, default: false },
+    is_published: { type: Boolean, default: true },
     stock: {
       type: Number,
       default: 0,
@@ -51,6 +51,15 @@ const ProductSchema = new mongoose.Schema(
     orderable_stock: {
       type: Number,
       default: 0,
+    },
+    weight: {
+      type: Number,
+      default: 0,
+    },
+    unit: {
+      type: String,
+      enum: ["piece", "litre", "kg", "gram"],
+      default: "kg",
     },
     ad_pixel_id: { type: String, default: null },
     manufacturer: { type: String },

@@ -54,6 +54,8 @@ const placeOrder = async (req, res) => {
       _id: item.product._id,
       quantity: item.quantity,
       price: item.product.price,
+      weight: item.product.weight,
+      unit: item.product.unit,
       discount_price:
         item.product.price - (item.product.price * item.product.discount) / 100,
       total_price:
