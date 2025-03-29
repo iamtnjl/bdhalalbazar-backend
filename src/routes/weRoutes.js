@@ -6,7 +6,7 @@ const { getAllUsers } = require("../controllers/userController");
 const {
   getAllOrders,
   updateOrderStatus,
-  getOrderDetails
+  getOrderDetails,
 } = require("../controllers/orderController");
 const { getAllBrands, createBrand } = require("../controllers/brandController");
 const { getAllColors, createColor } = require("../controllers/colorController");
@@ -52,8 +52,8 @@ router.get("/products", getAllProducts);
 router.post(
   "/products",
   upload.fields([
-    { name: "primary_image", maxCount: 1 }, // Single image
-    { name: "images", maxCount: 5 }, // Multiple images (max 5)
+    { name: "primary_image", maxCount: 1 },
+    { name: "images", maxCount: 10 },
   ]),
   createProduct
 );

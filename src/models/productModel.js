@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 async function generateId() {
   const { nanoid } = await import("nanoid");
+  return nanoid();
 }
 
 const ImageSchema = new mongoose.Schema({
@@ -25,7 +26,7 @@ const ProductSchema = new mongoose.Schema(
       set: (val) => parseFloat(val).toFixed(2),
       get: (val) => (val % 1 === 0 ? parseInt(val) : parseFloat(val)),
     },
-    stock_id: { type: String, default: generateId(), unique: true },
+    stock_id: { type: String, unique: true },
     brand: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -63,8 +64,17 @@ const ProductSchema = new mongoose.Schema(
     },
     ad_pixel_id: { type: String, default: null },
     manufacturer: { type: String },
+    description: { type: String },
   },
   { timestamps: true, toJSON: { getters: true } }
 );
+
+// Mongoose pre-save hook to generate the stock_id before saving
+ProductSchema.pre('save', async function (next) {
+  if (!this.stock_id) {
+    this.stock_id = await generateId();
+  }
+  next();
+});
 
 module.exports = mongoose.model("Product", ProductSchema);

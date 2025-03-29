@@ -17,15 +17,11 @@ const createProduct = async (req, res) => {
       materials,
       categories,
       colors,
-      status,
-      stock,
-      orderable_stock,
-      is_published,
-      ad_pixel_id,
+      weight,
+      unit,
+      description,
       manufacturer,
     } = req.body;
-
-    console.log({ bode: req.body, file: req.file });
 
     // Fetch brand, category, material, and color IDs from slugs
     const brandDocs = await Brand.find({ slug: { $in: brand } }).select("_id");
@@ -36,18 +32,6 @@ const createProduct = async (req, res) => {
       slug: { $in: materials },
     }).select("_id");
     const colorDocs = await Color.find({ slug: { $in: colors } }).select("_id");
-
-    // Validate if all provided slugs exist
-    if (
-      brandDocs.length !== brand.length ||
-      categoryDocs.length !== categories.length ||
-      materialDocs.length !== materials.length ||
-      colorDocs.length !== colors.length
-    ) {
-      return res
-        .status(400)
-        .json({ error: "Invalid brand, category, or material slug(s)" });
-    }
 
     // Initialize the image objects
     let primaryImage = {};
@@ -126,11 +110,9 @@ const createProduct = async (req, res) => {
       colors: colorDocs.map((c) => c._id),
       primary_image: primaryImage,
       images: multipleImages,
-      status,
-      is_published,
-      ad_pixel_id,
-      stock,
-      orderable_stock,
+      weight,
+      unit,
+      description,
       manufacturer,
     });
 
@@ -236,6 +218,8 @@ const getAllProducts = async (req, res) => {
       })),
       colors: product.colors.map((c) => ({ name: c.name, slug: c.slug })),
       primary_image: product.primary_image,
+      weight: product.weight,
+      unit: product.unit,
       images: product.images,
       status: product.status,
       is_published: product.is_published,
