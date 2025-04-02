@@ -17,8 +17,8 @@ app.use(express.urlencoded({ extended: true })); // Parse URL-encoded data
 app.use(
   cors({
     origin: [
-      "https://halalbazar.net",
-      "https://www.halalbazar.net",
+      "https://bdhalalbazar.com",
+      "https://www.bdhalalbazar.com",
       "http://localhost:3000",
       "http://172.20.10.2:3000",
     ],
