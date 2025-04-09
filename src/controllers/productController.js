@@ -6,6 +6,14 @@ const Color = require("../models/colorModel");
 const paginate = require("../utils/pagination");
 const cloudinary = require("../config/cloudinary");
 
+const toSlugArray = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  return value
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+};
 
 const createProduct = async (req, res) => {
   try {
@@ -241,10 +249,10 @@ const getProductDetails = async (req, res) => {
 
     // Fetch product with populated references
     const product = await Product.findById(productId)
-      .populate("brand", "name")
-      .populate("materials", "name")
-      .populate("categories", "name")
-      .populate("colors", "name");
+      .populate("brand", "name slug")
+      .populate("materials", "name slug")
+      .populate("categories", "name slug")
+      .populate("colors", "name slug");
 
     if (!product) {
       return res.status(404).json({ error: "Product not found" });
@@ -299,10 +307,136 @@ const getProductDetails = async (req, res) => {
       ad_pixel_id: product.ad_pixel_id,
       createdAt: product.createdAt,
       updatedAt: product.updatedAt,
+      weight: product.weight,
+      unit: product.unit,
+      description: product.description,
     });
   } catch (error) {
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
 
-module.exports = { createProduct, getAllProducts, getProductDetails };
+const updateProduct = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      name,
+      price,
+      discount,
+      brand,
+      materials,
+      categories,
+      colors,
+      weight,
+      unit,
+      description,
+      manufacturer,
+      is_published,
+      status,
+    } = req.body;
+
+    const updateData = {};
+
+    // Basic fields
+    if (name) updateData.name = name;
+    if (price) updateData.price = price;
+    if (discount) updateData.discount = discount;
+    if (weight) updateData.weight = weight;
+    if (unit) updateData.unit = unit;
+    if (description) updateData.description = description;
+    if (manufacturer) updateData.manufacturer = manufacturer;
+    if (is_published !== undefined) updateData.is_published = is_published;
+    if (status) updateData.status = status;
+
+    // Fetch referenced IDs using slugs
+
+    const brandSlugs = toSlugArray(brand);
+    const brandDocs = await Brand.find({ slug: { $in: brandSlugs } });
+    updateData.brand = brandDocs.map((b) => b._id);
+
+    const categoryDocs = await Category.find({ slug: { $in: categories } });
+    updateData.categories = categoryDocs.map((c) => c._id);
+
+    const materialSlugs = toSlugArray(materials);
+    const materialDocs = await Material.find({
+      slug: { $in: materialSlugs },
+    });
+    updateData.materials = materialDocs.map((m) => m._id);
+
+    const colorSlugs = toSlugArray(colors);
+    const colorDocs = await Color.find({ slug: { $in: colorSlugs } });
+    updateData.colors = colorDocs.map((c) => c._id);
+
+    // Handle primary image
+    if (req.files?.primary_image) {
+      const file = req.files.primary_image[0];
+
+      const [original, thumbnail, medium] = await Promise.all([
+        cloudinary.uploader.upload(file.path, { folder: "product_images" }),
+        cloudinary.uploader.upload(file.path, {
+          folder: "product_images",
+          transformation: [{ width: 150, height: 150, crop: "fill" }],
+        }),
+        cloudinary.uploader.upload(file.path, {
+          folder: "product_images",
+          transformation: [{ width: 600, height: 600, crop: "limit" }],
+        }),
+      ]);
+
+      updateData.primary_image = {
+        original: original.secure_url,
+        thumbnail: thumbnail.secure_url,
+        medium: medium.secure_url,
+      };
+    }
+
+    // Handle multiple images
+    if (req.files?.images?.length > 0) {
+      const multipleImages = await Promise.all(
+        req.files.images.map(async (file) => {
+          const [original, thumbnail, medium] = await Promise.all([
+            cloudinary.uploader.upload(file.path, { folder: "product_images" }),
+            cloudinary.uploader.upload(file.path, {
+              folder: "product_images",
+              transformation: [{ width: 150, height: 150, crop: "fill" }],
+            }),
+            cloudinary.uploader.upload(file.path, {
+              folder: "product_images",
+              transformation: [{ width: 600, height: 600, crop: "limit" }],
+            }),
+          ]);
+
+          return {
+            original: original.secure_url,
+            thumbnail: thumbnail.secure_url,
+            medium: medium.secure_url,
+          };
+        })
+      );
+
+      updateData.images = multipleImages;
+    }
+
+    // Perform the update
+    const updatedProduct = await Product.findByIdAndUpdate(id, updateData, {
+      new: true,
+      runValidators: true,
+    });
+
+    if (!updatedProduct) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    res.status(200).json(updatedProduct);
+  } catch (error) {
+    console.error("Product update error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+module.exports = {
+  createProduct,
+  getAllProducts,
+  getProductDetails,
+  updateProduct,
+};

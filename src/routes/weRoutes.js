@@ -12,7 +12,9 @@ const { getAllBrands, createBrand } = require("../controllers/brandController");
 const { getAllColors, createColor } = require("../controllers/colorController");
 const {
   getAllProducts,
+  getProductDetails,
   createProduct,
+  updateProduct,
 } = require("../controllers/productController");
 
 const {
@@ -49,6 +51,7 @@ router.patch("/orders/:orderId", updateOrderStatus);
 
 //Products API
 router.get("/products", getAllProducts);
+router.get("/products/:productId", getProductDetails);
 router.post(
   "/products",
   upload.fields([
@@ -56,6 +59,14 @@ router.post(
     { name: "images", maxCount: 10 },
   ]),
   createProduct
+);
+router.patch(
+  "/product/:id",
+  upload.fields([
+    { name: "primary_image", maxCount: 1 },
+    { name: "images", maxCount: 10 },
+  ]),
+  updateProduct
 );
 
 module.exports = router;
