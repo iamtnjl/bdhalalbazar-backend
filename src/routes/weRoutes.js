@@ -15,6 +15,8 @@ const {
   getProductDetails,
   createProduct,
   updateProduct,
+  updateProductVisibility,
+  deleteProductById,
 } = require("../controllers/productController");
 
 const {
@@ -68,5 +70,7 @@ router.patch(
   ]),
   updateProduct
 );
+router.patch("/product/:id/publish", updateProductVisibility);
+router.delete("/product/:id", deleteProductById);
 
 module.exports = router;

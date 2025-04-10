@@ -131,6 +131,117 @@ const createProduct = async (req, res) => {
   }
 };
 
+const publicGetAllProducts = async (req, res) => {
+  try {
+    let query = { is_published: true };
+
+    // Search by name
+    if (req.query.search) {
+      query.name = { $regex: req.query.search, $options: "i" };
+    }
+
+    // Filtering by price range
+    if (req.query.minPrice || req.query.maxPrice) {
+      query.price = {};
+      if (req.query.minPrice) query.price.$gte = parseFloat(req.query.minPrice);
+      if (req.query.maxPrice) query.price.$lte = parseFloat(req.query.maxPrice);
+    }
+
+    // Function to convert a comma-separated string into an array
+    const convertToArray = (value) => value.split(",");
+
+    // Function to fetch ObjectIds from slugs
+    const fetchObjectIds = async (Model, slugs) => {
+      const items = await Model.find({ slug: { $in: slugs } }, "_id");
+      return items.map((item) => item._id);
+    };
+
+    // Unified filtering for brand, categories, materials, and colors (using slugs)
+    const applySlugFilter = async (field, model) => {
+      if (req.query[field]) {
+        const slugs = convertToArray(req.query[field]);
+        const ids = await fetchObjectIds(model, slugs);
+        query[field] = { $in: ids };
+      }
+    };
+
+    // Apply filters for brand, categories, materials, and colors
+    await applySlugFilter("brand", Brand);
+    await applySlugFilter("categories", Category);
+    await applySlugFilter("materials", Material);
+    await applySlugFilter("colors", Color);
+
+    // Sorting logic
+    let sort = {};
+    if (req.query.sort_by) {
+      switch (req.query.sort_by) {
+        case "price_asc":
+          sort = { price: -1 };
+          break;
+        case "price_desc":
+          sort = { price: 1 };
+          break;
+        case "newest":
+          sort = { createdAt: -1 };
+          break;
+        case "oldest":
+          sort = { createdAt: 1 };
+          break;
+        default:
+          sort = { createdAt: -1 };
+          break;
+      }
+    }
+
+    // Get paginated results with populated fields
+    const paginatedData = await paginate(
+      Product,
+      query,
+      req,
+      ["brand", "materials", "categories", "colors"],
+      sort
+    );
+
+    // Discount calculation
+    const calculateDiscount = (product) => {
+      const discountedPrice =
+        product.price - (product.price * product.discount) / 100;
+      return discountedPrice % 1 === 0
+        ? parseInt(discountedPrice)
+        : parseFloat(discountedPrice.toFixed(2));
+    };
+
+    // Transform the results
+    paginatedData.results = paginatedData.results.map((product) => ({
+      _id: product._id,
+      name: product.name,
+      price: product.price,
+      discount: product.discount,
+      discounted_price: calculateDiscount(product),
+      brand: product.brand.map((b) => ({ name: b.name, slug: b.slug })),
+      materials: product.materials.map((m) => ({ name: m.name, slug: m.slug })),
+      categories: product.categories.map((c) => ({
+        name: c.name,
+        slug: c.slug,
+      })),
+      colors: product.colors.map((c) => ({ name: c.name, slug: c.slug })),
+      primary_image: product.primary_image,
+      weight: product.weight,
+      unit: product.unit,
+      images: product.images,
+      status: product.status,
+      is_published: product.is_published,
+      createdAt: product.createdAt,
+      updatedAt: product.updatedAt,
+      stock: product.stock,
+      orderable_stock: product.orderable_stock,
+    }));
+
+    res.status(200).json(paginatedData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
 const getAllProducts = async (req, res) => {
   try {
     let query = {};
@@ -434,9 +545,61 @@ const updateProduct = async (req, res) => {
   }
 };
 
+const updateProductVisibility = async (req, res) => {
+  const { id } = req.params;
+  const { is_published } = req.body;
+
+  if (typeof is_published !== "boolean") {
+    return res.status(400).json({ error: "'is_published' must be a boolean." });
+  }
+
+  try {
+    const product = await Product.findByIdAndUpdate(
+      id,
+      { is_published },
+      { new: true }
+    );
+
+    if (!product) {
+      return res.status(404).json({ error: "Product not found." });
+    }
+
+    res
+      .status(200)
+      .json({ message: "Product publish status updated.", product });
+  } catch (error) {
+    res.status(500).json({ error: "Server error.", details: error.message });
+  }
+};
+
+const deleteProductById = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const deletedProduct = await Product.findByIdAndDelete(id);
+
+    if (!deletedProduct) {
+      return res.status(404).json({ error: "Product not found." });
+    }
+
+    res.status(200).json({
+      message: "Product successfully deleted.",
+      deletedProduct,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to delete the product.",
+      details: error.message,
+    });
+  }
+};
+
 module.exports = {
   createProduct,
+  publicGetAllProducts,
   getAllProducts,
   getProductDetails,
   updateProduct,
+  updateProductVisibility,
+  deleteProductById,
 };

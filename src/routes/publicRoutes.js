@@ -6,7 +6,7 @@ const { getAllMaterials } = require("../controllers/materialController");
 const { getAllCategories } = require("../controllers/categoryController");
 const { getAllColors } = require("../controllers/colorController");
 const {
-  getAllProducts,
+  publicGetAllProducts,
   getProductDetails,
 } = require("../controllers/productController");
 const {
@@ -24,7 +24,7 @@ router.get("/categories", getAllCategories);
 router.get("/colors", getAllColors);
 
 //Products API
-router.get("/products", getAllProducts);
+router.get("/products", publicGetAllProducts);
 router.get("/products/:productId", getProductDetails);
 
 //Cart API
