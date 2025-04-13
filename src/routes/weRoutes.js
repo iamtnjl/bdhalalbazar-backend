@@ -28,6 +28,11 @@ const {
   createMaterial,
 } = require("../controllers/materialController");
 
+const {
+  getSettings,
+  updateSettings,
+} = require("../controllers/settingsController");
+
 router.get("/", getAllUsers);
 
 // Brands API
@@ -72,5 +77,9 @@ router.patch(
 );
 router.patch("/product/:id/publish", updateProductVisibility);
 router.delete("/product/:id", deleteProductById);
+
+//Settings API
+router.get("/settings", getSettings);
+router.put("/settings", updateSettings);
 
 module.exports = router;
