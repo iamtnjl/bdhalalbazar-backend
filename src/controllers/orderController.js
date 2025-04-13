@@ -1,6 +1,6 @@
 const Order = require("../models/orderModel.js");
 const Cart = require("../models/cartModel.js");
-const User = require("../models/userModel.js");
+const Settings = require("../models/settingsModel.js");
 const Product = require("../models/productModel.js");
 const mongoose = require("mongoose");
 const paginate = require("../utils/pagination.js");
@@ -15,7 +15,6 @@ const placeOrder = async (req, res) => {
   try {
     const { name, phone, address, cart_id, payment_method } = req.body;
 
-    // Validate ObjectId format
     if (!mongoose.isValidObjectId(cart_id)) {
       return res.status(400).json({ message: "Invalid cart ID" });
     }
@@ -32,6 +31,12 @@ const placeOrder = async (req, res) => {
 
     if (!cart) return res.status(404).json({ message: "Cart not found" });
 
+    // Fetch settings
+    const settings = await Settings.findOne();
+    const delivery_charge = settings?.delivery_charge || 0;
+    const platform_fee = settings?.platform_fee || 0;
+
+    // Subtotal and discount calculations
     cart.sub_total = cart.cart_products.reduce(
       (sum, item) => sum + (item.product?.price || 0) * item.quantity,
       0
@@ -45,11 +50,9 @@ const placeOrder = async (req, res) => {
       return sum + discount * item.quantity;
     }, 0);
 
-    cart.grand_total = cart.sub_total - cart.discount;
+    cart.grand_total =
+      cart.sub_total - cart.discount + delivery_charge + platform_fee;
 
-    if (!cart) return res.status(404).json({ message: "Cart not found" });
-
-    // Extract cart details for the order
     const orderItems = cart.cart_products.map((item) => ({
       _id: item.product._id,
       quantity: item.quantity,
@@ -64,21 +67,20 @@ const placeOrder = async (req, res) => {
         item.quantity,
     }));
 
-    // Deduct stock from product model
     for (const item of cart.cart_products) {
       await Product.findByIdAndUpdate(item.product._id, {
         $inc: { stock: -item.quantity },
       });
     }
 
-    // Create Order
     const newOrder = new Order({
       order_id: generateOrderId(),
       name,
       phone,
       payment_method,
       address,
-      delivery_charge: cart.delivery_charge,
+      delivery_charge,
+      platform_fee,
       items: orderItems,
       sub_total: cart.sub_total,
       discount: cart.discount,
@@ -97,7 +99,6 @@ const placeOrder = async (req, res) => {
     });
 
     await newOrder.save();
-
     await Cart.findByIdAndDelete(cart_id);
 
     res
@@ -107,7 +108,6 @@ const placeOrder = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
-
 // Get Order List (Search by Order ID & Filter by Status)
 // Function to get orders for the logged-in user based on phone number
 const getOrders = async (req, res) => {
@@ -217,13 +217,14 @@ const getOrderDetails = async (req, res) => {
       return res.status(404).json({ message: "Order not found" });
     }
 
-    // Transform the response to rename "items" to "products"
     order.products = order.items.map((item) => ({
-      product: item._id, // Full product details including brand, colors, etc.
+      product: item._id,
       quantity: item.quantity,
       price: item.price,
       discount_price: item.discount_price,
       total_price: item.total_price,
+      weight: item.weight,
+      unit: item.unit,
     }));
 
     // Remove the original "items" field
@@ -242,12 +243,11 @@ const updateOrderStatus = async (req, res) => {
     const { newStatus } = req.body;
 
     const order = await Order.findOne({ _id: orderId });
-    console.log(orderId);
     if (!order) return res.status(404).json({ message: "Order not found" });
 
     let foundIndex = -1;
 
-    // Loop through the status timeline
+    // Find the index of the newStatus in the status array
     order.status.forEach((status, index) => {
       if (status.slug === newStatus) foundIndex = index;
     });
@@ -256,21 +256,23 @@ const updateOrderStatus = async (req, res) => {
       return res.status(400).json({ message: "Invalid order status" });
     }
 
-    // Update status stages
+    // Update status stages and timestamps
     order.status.forEach((status, index) => {
       if (index < foundIndex) {
         status.stage = "completed";
       } else if (index === foundIndex) {
         status.stage = "current";
+        status.updatedAt = new Date(); // 🔥 Set updatedAt when it becomes current
       } else {
         status.stage = "pending";
       }
     });
 
-    // If the order is delivered, mark all statuses as completed
+    // If the order is delivered, mark all statuses as completed and update time
     if (newStatus === "delivered") {
       order.status.forEach((status) => {
         status.stage = "completed";
+        status.updatedAt = new Date(); // 🔥 Update time for all
       });
     }
 

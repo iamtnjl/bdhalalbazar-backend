@@ -15,11 +15,8 @@ const OrderSchema = new mongoose.Schema(
       zip: { type: String, required: true },
     },
 
-    // Reference to Cart Model for delivery charge
-    delivery_charge: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Cart",
-    },
+    delivery_charge: { type: Number, required: true },
+    platform_fee: { type: Number, required: true },
 
     // Order Items
     items: [

@@ -1,5 +1,6 @@
 const Cart = require("../models/cartModel");
 const Product = require("../models/productModel");
+const Settings = require("../models/settingsModel");
 
 const addOrUpdateCart = async (req, res) => {
   try {
@@ -36,36 +37,43 @@ const addOrUpdateCart = async (req, res) => {
         (item) => item.product.toString() === productId
       );
 
+      const final_price =
+        quantity * (product.price - (product.price * product.discount) / 100);
+
       if (productIndex !== -1) {
         if (quantity === 0) {
-          // Remove item if quantity is 0
           cart.cart_products.splice(productIndex, 1);
         } else {
-          // Update quantity & final price
           cart.cart_products[productIndex].quantity = quantity;
-          cart.cart_products[productIndex].final_price =
-            quantity *
-            (product.price - (product.price * product.discount) / 100);
+          cart.cart_products[productIndex].final_price = final_price;
+          cart.cart_products[productIndex].weight = product.weight;
+          cart.cart_products[productIndex].unit = product.unit;
         }
       } else {
         if (quantity > 0) {
-          // Add product if it's not in cart & quantity > 0
           cart.cart_products.push({
             product: productId,
-            quantity: quantity,
-            final_price:
-              quantity *
-              (product.price - (product.price * product.discount) / 100),
+            quantity,
+            final_price,
+            weight: product.weight,
+            unit: product.unit,
           });
         }
       }
     }
 
-    // Save cart first so it can be populated
     await cart.save();
 
-    // Populate product details before calculating totals
-    await cart.populate("cart_products.product");
+    // Populate product + nested references
+    await cart.populate({
+      path: "cart_products.product",
+      populate: [
+        { path: "brand" },
+        { path: "materials" },
+        { path: "categories" },
+        { path: "colors" },
+      ],
+    });
 
     // Recalculate totals
     cart.sub_total = cart.cart_products.reduce(
@@ -108,11 +116,11 @@ const getCart = async (req, res) => {
   try {
     const deviceId = req.query.deviceId;
 
-    // Validate that deviceId is provided
     if (!deviceId) {
       return res.status(400).json({ message: "Device ID is required" });
     }
 
+    // Fetch cart with product and nested refs
     let cart = await Cart.findOne({ deviceId }).populate({
       path: "cart_products.product",
       populate: [
@@ -124,12 +132,18 @@ const getCart = async (req, res) => {
     });
 
     if (!cart || cart.cart_products.length === 0) {
-      return res
-        .status(200)
-        .json({ message: "Cart not found for this device", cart_products: null });
+      return res.status(200).json({
+        message: "Cart not found for this device",
+        cart_products: null,
+      });
     }
 
-    // Explicitly setting final_price for each cart product
+    // Fetch delivery_charge and platform_fee from settings
+    const settings = await Settings.findOne();
+    const delivery_charge = settings?.delivery_charge || 0;
+    const platform_fee = settings?.platform_fee || 0;
+
+    // Calculate final prices
     cart.cart_products = cart.cart_products.map((item) => {
       const discounted_price =
         item.product?.price -
@@ -138,7 +152,6 @@ const getCart = async (req, res) => {
       return item;
     });
 
-    // Calculate subtotal, discount, and grand total
     cart.sub_total = cart.cart_products.reduce(
       (sum, item) => sum + (item.product?.price || 0) * item.quantity,
       0
@@ -157,6 +170,9 @@ const getCart = async (req, res) => {
       0
     );
 
+    // Add delivery_charge and platform_fee to grand_total
+    cart.grand_total += delivery_charge + platform_fee;
+
     await cart.save();
 
     res.json({
@@ -165,6 +181,8 @@ const getCart = async (req, res) => {
       sub_total: cart.sub_total,
       discount: cart.discount,
       grand_total: cart.grand_total,
+      delivery_charge,
+      platform_fee,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
