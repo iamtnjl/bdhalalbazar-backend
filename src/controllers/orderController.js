@@ -5,11 +5,6 @@ const Product = require("../models/productModel.js");
 const mongoose = require("mongoose");
 const paginate = require("../utils/pagination.js");
 
-// Generate a unique Order ID
-const generateOrderId = () => {
-  return `ORD-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-};
-
 // Place Order
 const placeOrder = async (req, res) => {
   try {
@@ -73,8 +68,10 @@ const placeOrder = async (req, res) => {
       });
     }
 
+    const count = await mongoose.model("Order").countDocuments();
+
     const newOrder = new Order({
-      order_id: generateOrderId(),
+      order_id: `${count + 1}`,
       name,
       phone,
       payment_method,
@@ -95,6 +92,14 @@ const placeOrder = async (req, res) => {
         },
         { name: "On the Way", slug: "on-the-way", stage: "pending" },
         { name: "Delivered", slug: "delivered", stage: "pending" },
+        { name: "Canceled", slug: "canceled", stage: "pending" },
+        { name: "Rejected", slug: "rejected", stage: "pending" },
+        {
+          name: "Failed to deliver",
+          slug: "failed-to-deliver",
+          stage: "pending",
+        },
+        { name: "Completed", slug: "completed", stage: "pending" },
       ],
     });
 
@@ -119,86 +124,160 @@ const getOrders = async (req, res) => {
       });
     }
 
-    // Extract filters from query params
     const { status, order_id } = req.query;
 
-    // Base query to fetch orders by phone number
     let query = { phone: userPhone };
 
-    // If order_id is provided, filter by order_id
     if (order_id) {
       query.order_id = order_id;
     }
 
-    // If status filter is provided, filter by status.slug inside the status array
     if (status) {
-      query["status.slug"] = status;
+      query["status"] = {
+        $elemMatch: {
+          slug: status,
+          stage: { $in: ["current"] },
+        },
+      };
     }
 
-    // Fetch orders with filtering and sorting by createdAt (newest first)
-    const orders = await Order.find(query)
-      .select("_id order_id createdAt status grand_total")
-      .sort({ createdAt: -1 }) // Sorting in descending order (newest first)
-      .exec();
+    const paginatedOrders = await paginate(Order, query, req, [], {
+      createdAt: -1,
+    });
 
-    if (orders.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "No orders found for the given criteria" });
-    }
-
-    // Simplify the status field to include only the current stage
-    const simplifiedOrders = orders.map((order) => {
-      const currentStatus = order.status.find((status) =>
-        status.stage.includes("current")
+    paginatedOrders.results = paginatedOrders.results.map((order) => {
+      const currentStatus = order.status.find((s) =>
+        s.stage.includes("current")
       );
       return {
         _id: order._id,
         order_id: order.order_id,
         createdAt: order.createdAt,
-        status: currentStatus ? currentStatus.slug : "unknown",
+        status: currentStatus ? currentStatus.name : "unknown",
         grand_total: order.grand_total,
       };
     });
 
-    return res.status(200).json(simplifiedOrders);
+    res.status(200).json(paginatedOrders);
   } catch (error) {
     console.error(error);
-    return res
-      .status(500)
-      .json({ message: "An error occurred while fetching orders", error });
+    res.status(500).json({
+      message: "An error occurred while fetching orders",
+      error,
+    });
   }
 };
 
 const getAllOrders = async (req, res) => {
   try {
-    // Extract filters from query params
     const { status, order_id } = req.query;
 
     let query = {};
-    // If order_id is provided, filter by order_id
+
+    // If order_id is provided, search by exact match
     if (order_id) {
-      query.order_id = order_id;
+      query.order_id = { $regex: order_id, $options: "i" }; // case-insensitive search
     }
 
-    // If status filter is provided, filter by status.slug inside the status array
+    // If status is provided, search for status.slug inside array of objects
     if (status) {
-      query["status.slug"] = status;
+      query.status = {
+        $elemMatch: {
+          slug: status,
+          stage: "current", // Optional: match only if the stage is "current"
+        },
+      };
     }
 
     const paginatedData = await paginate(Order, query, req);
 
     return res.status(200).json(paginatedData);
   } catch (error) {
-    console.error(error);
-    return res
-      .status(500)
-      .json({ message: "An error occurred while fetching orders", error });
+    console.error("Error fetching all orders:", error);
+    return res.status(500).json({
+      message: "An error occurred while fetching orders",
+      error,
+    });
   }
 };
 
 //  Get Order Details
 const getOrderDetails = async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.orderId)
+      .populate({
+        path: "items._id",
+        model: "Product",
+        populate: [
+          { path: "brand", select: "name" },
+          { path: "materials", select: "name" },
+          { path: "colors", select: "name" },
+          { path: "categories", select: "name" },
+        ],
+      })
+      .lean();
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    // Map product items
+    order.products = order.items.map((item) => ({
+      product: item._id,
+      quantity: item.quantity,
+      price: item.price,
+      discount_price: item.discount_price,
+      total_price: item.total_price,
+      weight: item.weight,
+      unit: item.unit,
+    }));
+    delete order.items;
+
+    // Filter and transform statuses
+    const failedStatuses = [
+      "rejected",
+      "canceled",
+      "return",
+      "failed-to-deliver",
+    ];
+
+    let showCanceled = false;
+    let canceledTimestamp = null;
+
+    // Loop through all statuses to check if we should show 'Canceled'
+    for (const status of order.status) {
+      if (failedStatuses.includes(status.slug) && status.stage === "current") {
+        showCanceled = true;
+        canceledTimestamp = status.updatedAt;
+        break;
+      }
+    }
+
+    // Filter out failed statuses
+    const filteredStatus = order.status.filter(
+      (status) => !failedStatuses.includes(status.slug)
+    );
+
+    // Append synthetic "Canceled" status if needed
+    if (showCanceled) {
+      filteredStatus.push({
+        name: "Canceled",
+        slug: "canceled",
+        stage: "current",
+        updatedAt: canceledTimestamp || new Date(),
+      });
+    }
+
+    order.status = filteredStatus;
+
+    res.json(order);
+  } catch (error) {
+    console.error("Error fetching order details:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+const getAdminOrderDetails = async (req, res) => {
   try {
     const order = await Order.findById(req.params.orderId)
       .populate({
@@ -245,39 +324,31 @@ const updateOrderStatus = async (req, res) => {
     const order = await Order.findOne({ _id: orderId });
     if (!order) return res.status(404).json({ message: "Order not found" });
 
-    let foundIndex = -1;
-
-    // Find the index of the newStatus in the status array
-    order.status.forEach((status, index) => {
-      if (status.slug === newStatus) foundIndex = index;
-    });
-
+    let foundIndex = order.status.findIndex((s) => s.slug === newStatus);
     if (foundIndex === -1) {
       return res.status(400).json({ message: "Invalid order status" });
     }
 
-    // Update status stages and timestamps
     order.status.forEach((status, index) => {
+      const previousStage = status.stage;
+
       if (index < foundIndex) {
         status.stage = "completed";
+        if (previousStage !== "completed") {
+          status.updatedAt = new Date();
+        }
       } else if (index === foundIndex) {
         status.stage = "current";
-        status.updatedAt = new Date(); // 🔥 Set updatedAt when it becomes current
+        if (previousStage !== "current") {
+          status.updatedAt = new Date();
+        }
       } else {
         status.stage = "pending";
+        // Keep updatedAt as is for pending
       }
     });
 
-    // If the order is delivered, mark all statuses as completed and update time
-    if (newStatus === "delivered") {
-      order.status.forEach((status) => {
-        status.stage = "completed";
-        status.updatedAt = new Date(); // 🔥 Update time for all
-      });
-    }
-
     await order.save();
-
     res.json({ message: "Order status updated successfully", order });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -290,4 +361,5 @@ module.exports = {
   getOrders,
   getOrderDetails,
   getAllOrders,
+  getAdminOrderDetails,
 };

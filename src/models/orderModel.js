@@ -45,6 +45,11 @@ const OrderSchema = new mongoose.Schema(
     sub_total: { type: Number, required: true },
     discount: { type: Number, required: true },
     grand_total: { type: Number, required: true },
+    review: { type: String, default: "" },
+    rating: { type: Number, min: 1, max: 5, default: null },
+    edit_reason: { type: String, default: "" },
+    failed_reason: { type: String, default: "" },
+    return_reason: { type: String, default: "" },
 
     // Order Status History
     status: [
@@ -63,6 +68,7 @@ const OrderSchema = new mongoose.Schema(
             "canceled",
             "return",
             "failed-to-deliver",
+            "completed",
           ],
         },
         stage: {
