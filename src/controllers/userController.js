@@ -126,8 +126,31 @@ const getAllUsers = async (req, res) => {
   }
 };
 
+const saveFcmToken = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { token } = req.body;
+
+    if (!token) return res.status(400).json({ message: "Token is required" });
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { fcm_token: token },
+      { new: true }
+    );
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    return res.status(200).json({ message: "FCM token saved", user });
+  } catch (error) {
+    console.error("Save FCM Token Error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 module.exports = {
   registerUser,
   loginUser,
   getAllUsers,
+  saveFcmToken,
 };

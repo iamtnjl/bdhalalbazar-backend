@@ -1,9 +1,11 @@
 const Order = require("../models/orderModel.js");
 const Cart = require("../models/cartModel.js");
 const Settings = require("../models/settingsModel.js");
+const User = require("../models/userModel.js");
 const Product = require("../models/productModel.js");
 const mongoose = require("mongoose");
 const paginate = require("../utils/pagination.js");
+const { adminMessaging } = require("../config/firebase.js");
 
 // Place Order
 const placeOrder = async (req, res) => {
@@ -105,6 +107,39 @@ const placeOrder = async (req, res) => {
 
     await newOrder.save();
     await Cart.findByIdAndDelete(cart_id);
+    const adminUsers = await User.find({
+      role: "admin",
+      fcm_token: { $exists: true, $ne: null },
+    });
+
+    if (adminUsers.length > 0) {
+      const notifications = adminUsers.map((adminUser) => {
+        const message = {
+          notification: {
+            title: "New Order Placed!",
+            body: `Order #${newOrder.order_id} placed by ${name}`,
+          },
+          token: adminUser.fcm_token,
+          webpush: {
+            notification: {
+              icon: "/logo/logo.png",
+              click_action: `https://bdhalalbazar.com/we/orders/${newOrder._id}`,
+            },
+          },
+        };
+
+        return adminMessaging.send(message);
+      });
+
+      try {
+        await Promise.all(notifications);
+      } catch (err) {
+        console.error(
+          "Error sending FCM notifications to admins:",
+          err.message
+        );
+      }
+    }
 
     res
       .status(201)

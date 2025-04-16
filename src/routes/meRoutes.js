@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const { saveFcmToken } = require("../controllers/userController");
 
 const {
   getAddresses,
@@ -21,5 +22,8 @@ router.post("/addresses", addOrEditAddress);
 //Order API
 router.get("/orders", getOrders);
 router.get("/orders/:orderId", getOrderDetails);
+
+//Firebase push notifications
+router.post("/save-fcm-token", saveFcmToken);
 
 module.exports = router;

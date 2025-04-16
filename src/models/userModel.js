@@ -37,6 +37,7 @@ const userSchema = new mongoose.Schema(
       thumbnail: { type: String },
       medium: { type: String },
     },
+    fcm_token: { type: String, default: null },
   },
   { timestamps: true }
 );
