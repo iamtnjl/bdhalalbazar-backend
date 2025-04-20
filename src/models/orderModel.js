@@ -30,10 +30,8 @@ const OrderSchema = new mongoose.Schema(
         price: { type: Number, required: true },
         discount_price: { type: Number, required: true },
         total_price: { type: Number, required: true },
-        weight: {
-          type: Number,
-          default: 0,
-        },
+        purchase_price: { type: Number, required: false },
+        weight: { type: Number, default: 0 },
         unit: {
           type: String,
           enum: ["piece", "litre", "kg", "gram"],
@@ -41,6 +39,7 @@ const OrderSchema = new mongoose.Schema(
         },
       },
     ],
+    total_purchase_price: { type: Number, required: true, default: 0 },
 
     sub_total: { type: Number, required: true },
     discount: { type: Number, required: true },

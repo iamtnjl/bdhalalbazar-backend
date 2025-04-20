@@ -6,7 +6,7 @@ const { getAllUsers } = require("../controllers/userController");
 const {
   getAllOrders,
   updateOrderStatus,
-
+  editOrderItem,
   getAdminOrderDetails,
 } = require("../controllers/orderController");
 const { getAllBrands, createBrand } = require("../controllers/brandController");
@@ -52,10 +52,11 @@ router.post("/categories", createCategory);
 router.get("/colors", getAllColors);
 router.post("/colors", createColor);
 
-//Orders API
+//Order API
 router.get("/orders", getAllOrders);
 router.get("/orders/:orderId", getAdminOrderDetails);
 router.patch("/orders/:orderId", updateOrderStatus);
+router.put("/orders/:orderId/edit", editOrderItem);
 
 //Products API
 router.get("/products", getAllProducts);

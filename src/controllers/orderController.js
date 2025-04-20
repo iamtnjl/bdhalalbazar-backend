@@ -266,6 +266,23 @@ const getOrderDetails = async (req, res) => {
       weight: item.weight,
       unit: item.unit,
     }));
+
+    order.isPriceEdited = order.items.some((item) => {
+      const price = item.price ?? 0;
+      const discount_price = item.discount_price ?? 0;
+      const quantity = item.quantity ?? 1;
+      const total_price = item.total_price ?? 0;
+
+      const expectedTotal =
+        (discount_price > 0 ? discount_price : price) * quantity;
+
+      return Math.round(expectedTotal) !== Math.round(total_price);
+    });
+
+    order.calculated_total_price = order.items.reduce(
+      (sum, item) => sum + (item.total_price ?? 0),
+      0
+    );
     delete order.items;
 
     // Filter and transform statuses
@@ -337,9 +354,32 @@ const getAdminOrderDetails = async (req, res) => {
       price: item.price,
       discount_price: item.discount_price,
       total_price: item.total_price,
+      purchase_price: item.purchase_price,
       weight: item.weight,
       unit: item.unit,
     }));
+
+    order.total_purchase_price = order.items.reduce(
+      (sum, item) => sum + (item.purchase_price ?? 0),
+      0
+    );
+
+    order.isPriceEdited = order.items.some((item) => {
+      const price = item.price ?? 0;
+      const discount_price = item.discount_price ?? 0;
+      const quantity = item.quantity ?? 1;
+      const total_price = item.total_price ?? 0;
+
+      const expectedTotal =
+        (discount_price > 0 ? discount_price : price) * quantity;
+
+      return Math.round(expectedTotal) !== Math.round(total_price);
+    });
+
+    order.calculated_total_price = order.items.reduce(
+      (sum, item) => sum + (item.total_price ?? 0),
+      0
+    );
 
     // Remove the original "items" field
     delete order.items;
@@ -350,6 +390,7 @@ const getAdminOrderDetails = async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 };
+
 //  Update Order Status
 const updateOrderStatus = async (req, res) => {
   try {
@@ -390,6 +431,73 @@ const updateOrderStatus = async (req, res) => {
   }
 };
 
+//Edit order items
+const editOrderItem = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { product_id, weight, unit, total_price, purchase_price } = req.body;
+
+    if (
+      !mongoose.isValidObjectId(orderId) ||
+      !mongoose.isValidObjectId(product_id)
+    ) {
+      return res.status(400).json({ message: "Invalid Order or Product ID" });
+    }
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    const itemIndex = order.items.findIndex((item) =>
+      item._id.equals(product_id)
+    );
+
+    if (itemIndex === -1) {
+      return res.status(404).json({ message: "Product not found in order" });
+    }
+
+    // Update the specific item
+    order.items[itemIndex].weight = weight;
+    order.items[itemIndex].unit = unit;
+    order.items[itemIndex].total_price = total_price;
+    order.items[itemIndex].purchase_price = purchase_price;
+
+    // Recalculate prices
+    order.sub_total = order.items.reduce(
+      (sum, item) => sum + (item.price ?? 0) * (item.quantity ?? 1),
+      0
+    );
+
+    order.discount = order.items.reduce(
+      (sum, item) =>
+        sum +
+        ((item.price ?? 0) - (item.discount_price ?? 0)) * (item.quantity ?? 1),
+      0
+    );
+
+    order.total_purchase_price = order.items.reduce(
+      (sum, item) => sum + (item.purchase_price ?? 0),
+      0
+    );
+
+    order.grand_total = order.items.reduce(
+      (sum, item) =>
+        sum +
+        (item.total_price ?? 0) +
+        (order.delivery_charge ?? 0) +
+        (order.platform_fee ?? 0),
+      0
+    );
+
+    await order.save();
+
+    res.status(200).json({ message: "Order item updated successfully", order });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   updateOrderStatus,
   placeOrder,
@@ -397,4 +505,5 @@ module.exports = {
   getOrderDetails,
   getAllOrders,
   getAdminOrderDetails,
+  editOrderItem,
 };
