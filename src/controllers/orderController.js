@@ -481,14 +481,13 @@ const editOrderItem = async (req, res) => {
       0
     );
 
-    order.grand_total = order.items.reduce(
-      (sum, item) =>
-        sum +
-        (item.total_price ?? 0) +
-        (order.delivery_charge ?? 0) +
-        (order.platform_fee ?? 0),
+    const itemTotal = order.items.reduce(
+      (sum, item) => sum + (item.total_price ?? 0),
       0
     );
+
+    order.grand_total =
+      itemTotal + (order.delivery_charge ?? 0) + (order.platform_fee ?? 0);
 
     await order.save();
 
