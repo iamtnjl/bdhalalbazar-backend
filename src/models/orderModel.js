@@ -12,7 +12,7 @@ const OrderSchema = new mongoose.Schema(
     address: {
       street: { type: String, required: true },
       city: { type: String, required: true },
-      zip: { type: String, required: true },
+      zip: { type: String, required: false },
     },
 
     delivery_charge: { type: Number, required: true },
