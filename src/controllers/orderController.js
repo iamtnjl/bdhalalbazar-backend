@@ -223,26 +223,31 @@ const getOrders = async (req, res) => {
 
 const getAllOrders = async (req, res) => {
   try {
-    const { status, order_id } = req.query;
+    const { search, status } = req.query;
 
     let query = {};
 
-    // If order_id is provided, search by exact match
-    if (order_id) {
-      query.order_id = { $regex: order_id, $options: "i" }; // case-insensitive search
+    // 🔍 Search by phone or order_id (case-insensitive partial match)
+    if (search) {
+      query.$or = [
+        { phone: { $regex: search, $options: "i" } },
+        { order_id: { $regex: search, $options: "i" } },
+      ];
     }
 
-    // If status is provided, search for status.slug inside array of objects
+    // 🎯 Filter by order status (e.g., 'pending', 'delivered')
     if (status) {
       query.status = {
         $elemMatch: {
           slug: status,
-          stage: "current", // Optional: match only if the stage is "current"
+          stage: "current", // Match only if the stage is "current"
         },
       };
     }
 
-    const paginatedData = await paginate(Order, query, req);
+    const paginatedData = await paginate(Order, query, req, [], {
+      createdAt: -1,
+    });
 
     return res.status(200).json(paginatedData);
   } catch (error) {
@@ -515,6 +520,73 @@ const editOrderItem = async (req, res) => {
   }
 };
 
+const getUserOrderSummary = async (req, res) => {
+  try {
+    const { search } = req.query;
+
+    // Match only users with role "user"
+    let match = { role: "user" };
+
+    if (search) {
+      const safeSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      match.$or = [
+        { name: { $regex: safeSearch, $options: "i" } },
+        { phone: { $regex: safeSearch, $options: "i" } },
+      ];
+    }
+
+    // Paginate user list
+    const paginatedUsers = await paginate(User, match, req, [], {
+      createdAt: -1,
+    });
+
+    // Pull phones from current page users
+    const userPhones = paginatedUsers.results.map((user) => user.phone);
+
+    // Aggregate order info by user phone
+    const orderData = await Order.aggregate([
+      { $match: { phone: { $in: userPhones } } },
+      {
+        $group: {
+          _id: "$phone",
+          total_orders: { $sum: 1 },
+          total_amount: { $sum: "$grand_total" },
+          last_order_date: { $max: "$createdAt" },
+        },
+      },
+    ]);
+
+    const orderMap = {};
+    orderData.forEach((entry) => {
+      orderMap[entry._id] = entry;
+    });
+
+    // Merge user + order summary
+    paginatedUsers.results = paginatedUsers.results.map((user) => {
+      const summary = orderMap[user.phone] || {
+        total_orders: 0,
+        total_amount: 0,
+        last_order_date: null,
+      };
+
+      return {
+        _id: user._id,
+        name: user.name,
+        phone: user.phone,
+        status: user.status,
+        total_orders: summary.total_orders,
+        total_amount: summary.total_amount,
+        last_order_date: summary.last_order_date,
+      };
+    });
+
+    res.status(200).json(paginatedUsers);
+  } catch (err) {
+    console.error("getUserOrderSummary error:", err.message);
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+};
+
 module.exports = {
   updateOrderStatus,
   placeOrder,
@@ -523,4 +595,5 @@ module.exports = {
   getAllOrders,
   getAdminOrderDetails,
   editOrderItem,
+  getUserOrderSummary,
 };

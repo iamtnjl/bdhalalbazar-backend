@@ -2,12 +2,16 @@ const express = require("express");
 const router = express.Router();
 const upload = require("../middlewares/multer");
 
-const { getAllUsers } = require("../controllers/userController");
+const {
+  getAllUsers,
+  getUserDetailsById,
+} = require("../controllers/userController");
 const {
   getAllOrders,
   updateOrderStatus,
   editOrderItem,
   getAdminOrderDetails,
+  getUserOrderSummary,
 } = require("../controllers/orderController");
 const { getAllBrands, createBrand } = require("../controllers/brandController");
 const { getAllColors, createColor } = require("../controllers/colorController");
@@ -35,6 +39,7 @@ const {
 } = require("../controllers/settingsController");
 
 router.get("/", getAllUsers);
+router.get("/users/:id", getUserDetailsById);
 
 // Brands API
 router.get("/brands", getAllBrands);
@@ -54,6 +59,7 @@ router.post("/colors", createColor);
 
 //Order API
 router.get("/orders", getAllOrders);
+router.get("/customers-orders", getUserOrderSummary);
 router.get("/orders/:orderId", getAdminOrderDetails);
 router.patch("/orders/:orderId", updateOrderStatus);
 router.put("/orders/:orderId/edit", editOrderItem);
