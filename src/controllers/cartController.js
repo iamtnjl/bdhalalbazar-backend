@@ -1,6 +1,7 @@
 const Cart = require("../models/cartModel");
 const Product = require("../models/productModel");
 const Settings = require("../models/settingsModel");
+const Order = require("../models/orderModel"  );
 
 const addOrUpdateCart = async (req, res) => {
   try {
@@ -138,10 +139,15 @@ const getCart = async (req, res) => {
       });
     }
 
-    // Fetch delivery_charge and platform_fee from settings
     const settings = await Settings.findOne();
-    const delivery_charge = settings?.delivery_charge || 0;
+    let delivery_charge = settings?.delivery_charge || 0;
     const platform_fee = settings?.platform_fee || 0;
+
+    // Check if any order exists for the device
+    const hasPreviousOrder = await Order.exists({ deviceId });
+    if (!hasPreviousOrder) {
+      delivery_charge = 0;
+    }
 
     // Calculate final prices
     cart.cart_products = cart.cart_products.map((item) => {

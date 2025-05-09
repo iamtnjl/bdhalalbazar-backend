@@ -30,6 +30,11 @@ const userSchema = new mongoose.Schema(
     },
     password: { type: String },
     role: { type: String, enum: ["user", "admin"], default: "user" },
+    status: {
+      type: String,
+      enum: ["placeholder", "pending", "active", "suspended"],
+      default: "placeholder",
+    },
     address: { type: [addressSchema], default: [] },
     lastLogin: { type: Date, default: null },
     images: {

@@ -26,11 +26,28 @@ const placeOrder = async (req, res) => {
       ],
     });
 
+    console.log(cart.deviceId);
+
     if (!cart) return res.status(404).json({ message: "Cart not found" });
 
+    let user = await User.findOne({ phone });
+
+    if (!user) {
+      user = new User({
+        name,
+        phone,
+        address: [address],
+        status: "placeholder",
+      });
+
+      await user.save();
+    }
+
     // Fetch settings
+
+    const previousOrder = await Order.findOne({ deviceId: cart.deviceId });
     const settings = await Settings.findOne();
-    const delivery_charge = settings?.delivery_charge || 0;
+    const delivery_charge = previousOrder ? settings?.delivery_charge : 0;
     const platform_fee = settings?.platform_fee || 0;
 
     // Subtotal and discount calculations
@@ -80,6 +97,7 @@ const placeOrder = async (req, res) => {
       address,
       delivery_charge,
       platform_fee,
+      deviceId: cart.deviceId,
       items: orderItems,
       sub_total: cart.sub_total,
       discount: cart.discount,

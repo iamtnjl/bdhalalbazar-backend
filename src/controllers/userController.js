@@ -5,28 +5,26 @@ const { generateTokens } = require("../utils/generateTokens");
 // Register User
 const registerUser = async (req, res) => {
   try {
-    // Extract form-data fields
     const { name, email, phone, password, address, role, folderName } =
       req.body;
 
-    // Check if all required fields are present
     if (!name || !phone || !password) {
       return res
         .status(400)
-        .json({ message: "Name, Phone, Password is required." });
+        .json({ message: "Name, Phone, and Password are required." });
     }
 
-    // Check if user already exists
     const normalizedEmail = email?.trim().toLowerCase();
-    let existingUser;
-    if (phone) {
-      existingUser = await User.findOne({ phone });
+
+    let existingUser = await User.findOne({ phone });
+
+    if (existingUser) {
+      if (existingUser.status === "active") {
+        return res.status(400).json({ message: "User already exists" });
+      }
     }
 
-    if (existingUser)
-      return res.status(400).json({ message: "User already exists" });
-
-    // Convert address from string to JSON (if sent as JSON string in form-data)
+    // Parse address
     let parsedAddress = [];
     if (address) {
       try {
@@ -38,22 +36,18 @@ const registerUser = async (req, res) => {
 
     let images = { original: "", thumbnail: "", medium: "" };
 
-    // Upload image to Cloudinary if provided
     if (req.file) {
       const folder = folderName || "user_image";
 
-      // Upload original image
       const original = await cloudinary.uploader.upload(req.file.path, {
         folder: folder,
       });
 
-      // Upload thumbnail version
       const thumbnail = await cloudinary.uploader.upload(req.file.path, {
         folder: folder,
         transformation: [{ width: 150, height: 150, crop: "fill" }],
       });
 
-      // Upload medium version
       const medium = await cloudinary.uploader.upload(req.file.path, {
         folder: folder,
         transformation: [{ width: 500, height: 500, crop: "limit" }],
@@ -66,21 +60,30 @@ const registerUser = async (req, res) => {
       };
     }
 
-    let userData = {
+    const userData = {
       name,
       phone,
       password,
       address: parsedAddress,
       role,
       images,
+      status: "active", // Promote user from placeholder to active
     };
 
     if (normalizedEmail) {
       userData.email = normalizedEmail;
     }
 
-    // Create user
-    const user = await User.create(userData);
+    let user;
+
+    if (existingUser) {
+      // Update placeholder/suspended/pending user
+      Object.assign(existingUser, userData);
+      user = await existingUser.save();
+    } else {
+      // Create new user
+      user = await User.create(userData);
+    }
 
     res.json(user);
   } catch (error) {
@@ -148,9 +151,57 @@ const saveFcmToken = async (req, res) => {
   }
 };
 
+// Setup Password for Placeholder Account
+const setupPassword = async (req, res) => {
+  try {
+    const { phone, password } = req.body;
+
+    if (!phone || !password) {
+      return res
+        .status(400)
+        .json({ message: "Phone and password are required." });
+    }
+
+    const user = await User.findOne({ phone });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    if (user.status !== "placeholder") {
+      return res
+        .status(400)
+        .json({ message: "Account already set up or not eligible." });
+    }
+
+    user.password = password;
+    user.status = "active";
+
+    await user.save();
+
+    const { accessToken, refreshToken } = generateTokens(user);
+
+    return res.status(200).json({
+      message: "Password set successfully. Account is now active.",
+      user: {
+        id: user._id,
+        name: user.name,
+        phone: user.phone,
+        role: user.role,
+        status: user.status,
+      },
+      access: accessToken,
+      refresh: refreshToken,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   registerUser,
   loginUser,
   getAllUsers,
   saveFcmToken,
+  setupPassword,
 };
