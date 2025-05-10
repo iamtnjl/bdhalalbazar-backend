@@ -7,7 +7,7 @@ const OrderSchema = new mongoose.Schema(
     phone: { type: String, required: true },
     payment_method: { type: String, required: true },
     delivery_date: { type: Date },
-    deviceId: { type: String, required: true },
+    deviceId: { type: String, required: false },
 
     // Address Structure
     address: {
