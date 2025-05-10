@@ -12,6 +12,7 @@ const {
   editOrderItem,
   getAdminOrderDetails,
   getUserOrderSummary,
+  orderDashboard,
 } = require("../controllers/orderController");
 const { getAllBrands, createBrand } = require("../controllers/brandController");
 const { getAllColors, createColor } = require("../controllers/colorController");
@@ -38,6 +39,10 @@ const {
   updateSettings,
 } = require("../controllers/settingsController");
 
+// Dashboard API
+router.get("/dashboard", orderDashboard);
+
+//Admin user API
 router.get("/", getAllUsers);
 router.get("/users/:id", getUserDetailsById);
 
