@@ -40,6 +40,7 @@ app.use("/api/public", require("./routes/publicRoutes"));
 app.use("/api/auth", require("./routes/userRoutes"));
 app.use("/api/me", protect, require("../src/routes/meRoutes"));
 app.use("/api/we", protect, adminProtect, require("../src/routes/weRoutes"));
+app.use("/api/facebook", require("./routes/facebook"));
 
 // Global Error Handler
 app.use((err, req, res, next) => {

@@ -26,8 +26,6 @@ const placeOrder = async (req, res) => {
       ],
     });
 
-    console.log(cart.deviceId);
-
     if (!cart) return res.status(404).json({ message: "Cart not found" });
 
     let user = await User.findOne({ phone });
