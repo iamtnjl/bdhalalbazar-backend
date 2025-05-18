@@ -11,6 +11,9 @@ const { protect, adminProtect } = require("../src/middlewares/auth");
 // Initialize Express App
 const app = express();
 
+const cookieParser = require("cookie-parser");
+app.use(cookieParser());
+
 // Middleware
 app.use(express.json()); // Parse JSON
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded data
@@ -22,6 +25,7 @@ app.use(
       "http://localhost:3000",
       "http://172.20.10.2:3000",
     ],
+    credentials: true,
   })
 ); // Allow cross-origin requests
 app.use(helmet()); // Secure HTTP headers
