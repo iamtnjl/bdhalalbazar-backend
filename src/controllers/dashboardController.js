@@ -38,8 +38,14 @@ const getDashboardStats = async (req, res) => {
     const grossProfit = totalOrderAmount - totalPurchaseAmount;
 
     const completedStatuses = ["delivered", "completed"];
+
     const completedOrders = await Order.find({
-      "status.slug": { $in: completedStatuses },
+      status: {
+        $elemMatch: {
+          slug: { $in: completedStatuses },
+          stage: "current",
+        },
+      },
       updatedAt: { $gte: startDate, $lte: endDate },
     });
     const totalCompletedAmount = completedOrders.reduce(
@@ -56,7 +62,12 @@ const getDashboardStats = async (req, res) => {
       "failed-to-deliver",
     ];
     const canceledOrders = await Order.find({
-      "status.slug": { $in: canceledStatuses },
+      status: {
+        $elemMatch: {
+          slug: { $in: canceledStatuses },
+          stage: "current",
+        },
+      },
       updatedAt: { $gte: startDate, $lte: endDate },
     });
     const totalCanceledOrders = canceledOrders.length;
