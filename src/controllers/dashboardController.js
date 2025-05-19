@@ -35,7 +35,6 @@ const getDashboardStats = async (req, res) => {
       (sum, order) => sum + (order.total_purchase_price || 0),
       0
     );
-    const grossProfit = totalOrderAmount - totalPurchaseAmount;
 
     const completedStatuses = ["delivered", "completed"];
 
@@ -52,6 +51,8 @@ const getDashboardStats = async (req, res) => {
       (sum, order) => sum + (order.grand_total || 0),
       0
     );
+
+    const grossProfit = totalCompletedAmount - totalPurchaseAmount;
 
     const totalCompletedOrders = completedOrders.length;
 
