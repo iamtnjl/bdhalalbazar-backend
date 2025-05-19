@@ -585,58 +585,6 @@ const getUserOrderSummary = async (req, res) => {
   }
 };
 
-const orderDashboard = async (req, res) => {
-  try {
-    const today = new Date();
-    const startOfDay = new Date(today.setHours(0, 0, 0, 0));
-    const endOfDay = new Date(today.setHours(23, 59, 59, 999));
-
-    const orders = await Order.find({
-      createdAt: { $gte: startOfDay, $lte: endOfDay },
-    });
-    const users = await User.find({
-      status: "active",
-      createdAt: { $gte: startOfDay, $lte: endOfDay },
-    });
-
-    const totalUserCreated = users.length;
-    const totalOrdersPlaced = orders.length;
-
-    let totalPendingOrders = 0;
-    let totalCompletedOrders = 0;
-    let totalOrderAmount = 0;
-    let totalPurchaseAmount = 0;
-
-    orders.forEach((order) => {
-      const currentStatus = order.status.find((s) => s.stage === "current");
-      const currentSlug = currentStatus?.slug;
-
-      if (currentSlug === "pending") {
-        totalPendingOrders++;
-      }
-
-      if (["delivered", "completed"].includes(currentSlug)) {
-        totalCompletedOrders++;
-      }
-
-      totalOrderAmount += order.grand_total || 0;
-      totalPurchaseAmount += order.total_purchase_price || 0;
-    });
-
-    return res.status(200).json({
-      totalOrdersPlaced,
-      totalPendingOrders,
-      totalCompletedOrders,
-      totalOrderAmount,
-      totalPurchaseAmount,
-      totalUserCreated,
-    });
-  } catch (error) {
-    console.error("Dashboard error:", error);
-    return res.status(500).json({ error: "Server error" });
-  }
-};
-
 module.exports = {
   updateOrderStatus,
   placeOrder,
@@ -646,5 +594,4 @@ module.exports = {
   getAdminOrderDetails,
   editOrderItem,
   getUserOrderSummary,
-  orderDashboard,
 };
