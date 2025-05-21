@@ -273,7 +273,9 @@ const getCartsWithUserInfo = async (req, res) => {
     const search = req.query.search || "";
 
     // Step 1: Filter by search (phone -> matching deviceIds)
-    let match = {};
+    let match = {
+      cart_products: { $ne: [] },
+    };
     if (search) {
       const matchingOrders = await Order.find({
         phone: { $regex: search, $options: "i" },
@@ -294,7 +296,9 @@ const getCartsWithUserInfo = async (req, res) => {
         for (const item of cart.cart_products) {
           const product = item.product;
           if (product && product.base_product) {
-            const baseProduct = await Product.findById(product.base_product).lean();
+            const baseProduct = await Product.findById(
+              product.base_product
+            ).lean();
             item.product.base_product = baseProduct || null;
           }
         }
@@ -323,7 +327,9 @@ const getCartsWithUserInfo = async (req, res) => {
     const paginatedResults = allCarts.slice(skip, skip + limit);
 
     // Step 6: Response
-    const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${req.path}`;
+    const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
+      req.path
+    }`;
     const queryParams = new URLSearchParams(req.query);
     queryParams.set("show", limit);
     queryParams.delete("page");
@@ -346,7 +352,6 @@ const getCartsWithUserInfo = async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 };
-
 
 module.exports = {
   addOrUpdateCart,
