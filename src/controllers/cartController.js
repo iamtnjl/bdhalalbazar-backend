@@ -284,10 +284,10 @@ const getCartsWithUserInfo = async (req, res) => {
       match.deviceId = { $in: matchedDeviceIds };
     }
 
-    // Step 2: Get all matching carts (no limit yet)
+    // Step 2: Get all matching carts
     let allCarts = await Cart.find(match)
       .populate("cart_products.product")
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1 }) // Sort newest first
       .lean();
 
     // Step 3: Enrich with base_product and user info
@@ -309,15 +309,26 @@ const getCartsWithUserInfo = async (req, res) => {
           .lean();
 
         cart.user = order ? { name: order.name, phone: order.phone } : null;
-        return cart;
+
+        // Ensure createdAt and updatedAt fields exist in response
+        return {
+          ...cart,
+          createdAt: cart.createdAt,
+          updatedAt: cart.updatedAt,
+        };
       })
     );
 
-    // Step 4: Sort - carts with user info first
+    // Step 4: Sort carts with user info first, keeping createdAt desc order
     allCarts.sort((a, b) => {
       const aHasUser = a.user && a.user.name && a.user.phone;
       const bHasUser = b.user && b.user.name && b.user.phone;
-      return bHasUser - aHasUser; // true comes first
+
+      if (aHasUser === bHasUser) {
+        return new Date(b.createdAt) - new Date(a.createdAt); // Newest first
+      }
+
+      return bHasUser - aHasUser; // True (1) comes before false (0)
     });
 
     // Step 5: Manual pagination
@@ -326,7 +337,7 @@ const getCartsWithUserInfo = async (req, res) => {
     const skip = (page - 1) * limit;
     const paginatedResults = allCarts.slice(skip, skip + limit);
 
-    // Step 6: Response
+    // Step 6: Response with pagination info
     const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
       req.path
     }`;
