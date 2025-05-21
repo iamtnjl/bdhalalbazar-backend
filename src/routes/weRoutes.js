@@ -14,6 +14,7 @@ const {
   getUserOrderSummary,
 } = require("../controllers/orderController");
 const { getDashboardStats } = require("../controllers/dashboardController");
+const { getCartsWithUserInfo } = require("../controllers/cartController");
 const { getAllBrands, createBrand } = require("../controllers/brandController");
 const { getAllColors, createColor } = require("../controllers/colorController");
 const {
@@ -61,6 +62,9 @@ router.post("/categories", createCategory);
 //Color API
 router.get("/colors", getAllColors);
 router.post("/colors", createColor);
+
+//Carts API
+router.get("/carts", getCartsWithUserInfo);
 
 //Order API
 router.get("/orders", getAllOrders);

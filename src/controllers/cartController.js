@@ -1,7 +1,8 @@
 const Cart = require("../models/cartModel");
 const Product = require("../models/productModel");
 const Settings = require("../models/settingsModel");
-const Order = require("../models/orderModel"  );
+const Order = require("../models/orderModel");
+const paginate = require("../utils/pagination");
 
 const addOrUpdateCart = async (req, res) => {
   try {
@@ -267,4 +268,89 @@ const deleteCartItem = async (req, res) => {
   }
 };
 
-module.exports = { addOrUpdateCart, getCart, deleteCartItem };
+const getCartsWithUserInfo = async (req, res) => {
+  try {
+    const search = req.query.search || "";
+
+    // Step 1: Filter by search (phone -> matching deviceIds)
+    let match = {};
+    if (search) {
+      const matchingOrders = await Order.find({
+        phone: { $regex: search, $options: "i" },
+      }).select("deviceId");
+      const matchedDeviceIds = matchingOrders.map((o) => o.deviceId);
+      match.deviceId = { $in: matchedDeviceIds };
+    }
+
+    // Step 2: Get all matching carts (no limit yet)
+    let allCarts = await Cart.find(match)
+      .populate("cart_products.product")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Step 3: Enrich with base_product and user info
+    allCarts = await Promise.all(
+      allCarts.map(async (cart) => {
+        for (const item of cart.cart_products) {
+          const product = item.product;
+          if (product && product.base_product) {
+            const baseProduct = await Product.findById(product.base_product).lean();
+            item.product.base_product = baseProduct || null;
+          }
+        }
+
+        const order = await Order.findOne({ deviceId: cart.deviceId })
+          .sort({ createdAt: -1 })
+          .select("name phone")
+          .lean();
+
+        cart.user = order ? { name: order.name, phone: order.phone } : null;
+        return cart;
+      })
+    );
+
+    // Step 4: Sort - carts with user info first
+    allCarts.sort((a, b) => {
+      const aHasUser = a.user && a.user.name && a.user.phone;
+      const bHasUser = b.user && b.user.name && b.user.phone;
+      return bHasUser - aHasUser; // true comes first
+    });
+
+    // Step 5: Manual pagination
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.show) || 20;
+    const skip = (page - 1) * limit;
+    const paginatedResults = allCarts.slice(skip, skip + limit);
+
+    // Step 6: Response
+    const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${req.path}`;
+    const queryParams = new URLSearchParams(req.query);
+    queryParams.set("show", limit);
+    queryParams.delete("page");
+
+    const nextPage =
+      page * limit < allCarts.length
+        ? `${baseUrl}?${queryParams.toString()}&page=${page + 1}`
+        : null;
+    const prevPage =
+      page > 1 ? `${baseUrl}?${queryParams.toString()}&page=${page - 1}` : null;
+
+    return res.status(200).json({
+      count: allCarts.length,
+      next: nextPage,
+      previous: prevPage,
+      results: paginatedResults,
+    });
+  } catch (err) {
+    console.error("Failed to fetch carts:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+
+module.exports = {
+  addOrUpdateCart,
+  getCart,
+  deleteCartItem,
+  getCartsWithUserInfo,
+};
