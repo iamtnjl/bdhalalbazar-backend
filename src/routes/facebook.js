@@ -8,8 +8,11 @@ router.post("/track", async (req, res) => {
 
     const fbp = req.cookies?._fbp;
     const fbc = req.cookies?._fbc;
-
-    const client_ip = req.ip || req.headers["x-forwarded-for"];
+    const client_ip =
+      req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+      req.connection?.remoteAddress ||
+      req.socket?.remoteAddress ||
+      req.ip;
     const user_agent = req.headers["user-agent"];
 
     const response = await sendFacebookEvent({

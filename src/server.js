@@ -10,7 +10,7 @@ const { protect, adminProtect } = require("../src/middlewares/auth");
 
 // Initialize Express App
 const app = express();
-
+app.set("trust proxy", true)
 const cookieParser = require("cookie-parser");
 app.use(cookieParser());
 
