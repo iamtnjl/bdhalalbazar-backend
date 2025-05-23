@@ -2,9 +2,11 @@ const Product = require("../models/productModel");
 const Brand = require("../models/brandModel");
 const Material = require("../models/materialModel");
 const Category = require("../models/categoryModel");
+const Settings = require("../models/settingsModel");
 const Color = require("../models/colorModel");
 const paginate = require("../utils/pagination");
 const cloudinary = require("../config/cloudinary");
+const { applyProfitMargin, applyDiscount } = require("../utils/price");
 
 const toSlugArray = (value) => {
   if (!value) return [];
@@ -135,28 +137,23 @@ const publicGetAllProducts = async (req, res) => {
   try {
     let query = { is_published: true };
 
-    // Search by name
     if (req.query.search) {
       query.name = { $regex: req.query.search, $options: "i" };
     }
 
-    // Filtering by price range
     if (req.query.minPrice || req.query.maxPrice) {
       query.price = {};
       if (req.query.minPrice) query.price.$gte = parseFloat(req.query.minPrice);
       if (req.query.maxPrice) query.price.$lte = parseFloat(req.query.maxPrice);
     }
 
-    // Function to convert a comma-separated string into an array
     const convertToArray = (value) => value.split(",");
 
-    // Function to fetch ObjectIds from slugs
     const fetchObjectIds = async (Model, slugs) => {
       const items = await Model.find({ slug: { $in: slugs } }, "_id");
       return items.map((item) => item._id);
     };
 
-    // Unified filtering for brand, categories, materials, and colors (using slugs)
     const applySlugFilter = async (field, model) => {
       if (req.query[field]) {
         const slugs = convertToArray(req.query[field]);
@@ -165,21 +162,19 @@ const publicGetAllProducts = async (req, res) => {
       }
     };
 
-    // Apply filters for brand, categories, materials, and colors
     await applySlugFilter("brand", Brand);
     await applySlugFilter("categories", Category);
     await applySlugFilter("materials", Material);
     await applySlugFilter("colors", Color);
 
-    // Sorting logic
     let sort = {};
     if (req.query.sort_by) {
       switch (req.query.sort_by) {
         case "price_asc":
-          sort = { price: -1 };
+          sort = { price: 1 };
           break;
         case "price_desc":
-          sort = { price: 1 };
+          sort = { price: -1 };
           break;
         case "newest":
           sort = { createdAt: -1 };
@@ -193,7 +188,22 @@ const publicGetAllProducts = async (req, res) => {
       }
     }
 
-    // Get paginated results with populated fields
+    const settings = await Settings.findOne();
+    const profitMargin = settings?.profit_margin || 0;
+
+    const profitCategoryNames = [
+      "vegetable",
+      "meat",
+      "beef",
+      "mutton",
+      "chicken",
+      "fish",
+    ];
+    const profitCategories = await Category.find({
+      slug: { $in: profitCategoryNames },
+    });
+    const profitCategoryIds = profitCategories.map((c) => c._id.toString());
+
     const paginatedData = await paginate(
       Product,
       query,
@@ -202,40 +212,47 @@ const publicGetAllProducts = async (req, res) => {
       sort
     );
 
-    // Discount calculation
-    const calculateDiscount = (product) => {
-      const discountedPrice =
-        product.price - (product.price * product.discount) / 100;
-      return discountedPrice % 1 === 0
-        ? parseInt(discountedPrice)
-        : parseFloat(discountedPrice.toFixed(2));
+    const hasProfitCategory = (productCategories) => {
+      return productCategories.some((cat) =>
+        profitCategoryIds.includes(cat._id.toString())
+      );
     };
 
-    // Transform the results
-    paginatedData.results = paginatedData.results.map((product) => ({
-      _id: product._id,
-      name: product.name,
-      price: product.price,
-      discount: product.discount,
-      discounted_price: calculateDiscount(product),
-      brand: product.brand.map((b) => ({ name: b.name, slug: b.slug })),
-      materials: product.materials.map((m) => ({ name: m.name, slug: m.slug })),
-      categories: product.categories.map((c) => ({
-        name: c.name,
-        slug: c.slug,
-      })),
-      colors: product.colors.map((c) => ({ name: c.name, slug: c.slug })),
-      primary_image: product.primary_image,
-      weight: product.weight,
-      unit: product.unit,
-      images: product.images,
-      status: product.status,
-      is_published: product.is_published,
-      createdAt: product.createdAt,
-      updatedAt: product.updatedAt,
-      stock: product.stock,
-      orderable_stock: product.orderable_stock,
-    }));
+    paginatedData.results = paginatedData.results.map((product) => {
+      const useProfitMargin = hasProfitCategory(product.categories);
+      const adjustedPrice = useProfitMargin
+        ? applyProfitMargin(product.price, profitMargin)
+        : product.price;
+      const discountedPrice = applyDiscount(adjustedPrice, product.discount);
+
+      return {
+        _id: product._id,
+        name: product.name,
+        price: adjustedPrice,
+        discount: product.discount,
+        discounted_price: discountedPrice,
+        brand: product.brand.map((b) => ({ name: b.name, slug: b.slug })),
+        materials: product.materials.map((m) => ({
+          name: m.name,
+          slug: m.slug,
+        })),
+        categories: product.categories.map((c) => ({
+          name: c.name,
+          slug: c.slug,
+        })),
+        colors: product.colors.map((c) => ({ name: c.name, slug: c.slug })),
+        primary_image: product.primary_image,
+        weight: product.weight,
+        unit: product.unit,
+        images: product.images,
+        status: product.status,
+        is_published: product.is_published,
+        createdAt: product.createdAt,
+        updatedAt: product.updatedAt,
+        stock: product.stock,
+        orderable_stock: product.orderable_stock,
+      };
+    });
 
     res.status(200).json(paginatedData);
   } catch (error) {
@@ -369,25 +386,44 @@ const getProductDetails = async (req, res) => {
       return res.status(404).json({ error: "Product not found" });
     }
 
-    // Ensure price and discount follow the correct format
-    const price =
-      product.price % 1 === 0
-        ? parseInt(product.price)
-        : parseFloat(product.price.toFixed(2));
-    const discount =
-      product.discount % 1 === 0
-        ? parseInt(product.discount)
-        : parseFloat(product.discount.toFixed(2));
+    // Fetch profit margin from settings
+    const settings = await Settings.findOne();
+    const profitMargin = settings?.profit_margin || 0;
 
-    // Calculate discounted price
-    const discountedPrice =
-      product.price - (product.price * product.discount) / 100;
-    const formattedDiscountedPrice =
-      discountedPrice % 1 === 0
-        ? parseInt(discountedPrice)
-        : parseFloat(discountedPrice.toFixed(2));
+    // Categories that require profit margin application
+    const profitCategorySlugs = [
+      "vegetable",
+      "meat",
+      "beef",
+      "mutton",
+      "chicken",
+      "fish",
+    ];
+    const profitCategories = await Category.find({
+      slug: { $in: profitCategorySlugs },
+    });
+    const profitCategoryIds = profitCategories.map((cat) => cat._id.toString());
 
-    // Ensure primary image is always the first in the images array
+    // Check if product belongs to any profit margin category
+    const isProfitApplied = product.categories.some((cat) =>
+      profitCategoryIds.includes(cat._id.toString())
+    );
+
+    // Calculate adjusted price with profit margin if applicable
+    const basePrice = product.price;
+    const priceWithProfit = isProfitApplied
+      ? applyProfitMargin(basePrice, profitMargin)
+      : basePrice;
+
+    // Calculate discount and discounted price
+    const discountPercent = product.discount || 0;
+    const discountedPrice = applyDiscount(priceWithProfit, discountPercent);
+
+    // Format price, discount, and discounted price for consistent decimal places
+    const formatNumber = (num) =>
+      num % 1 === 0 ? parseInt(num) : parseFloat(num.toFixed(2));
+
+    // Format images ensuring primary image first
     let images = product.images || [];
     if (product.primary_image) {
       images = [
@@ -402,9 +438,9 @@ const getProductDetails = async (req, res) => {
     res.status(200).json({
       _id: product._id,
       name: product.name,
-      price,
-      discount,
-      discounted_price: formattedDiscountedPrice,
+      price: formatNumber(priceWithProfit),
+      discount: formatNumber(discountPercent),
+      discounted_price: formatNumber(discountedPrice),
       stock_id: product.stock_id,
       brand: product.brand,
       materials: product.materials,
@@ -423,9 +459,12 @@ const getProductDetails = async (req, res) => {
       description: product.description,
     });
   } catch (error) {
+    console.error("getProductDetails error:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
+
+module.exports = getProductDetails;
 
 const updateProduct = async (req, res) => {
   try {

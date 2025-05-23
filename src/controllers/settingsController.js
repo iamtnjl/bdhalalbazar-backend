@@ -9,7 +9,9 @@ const getSettings = async (req, res) => {
       settings = await Settings.create({
         delivery_charge: 0,
         platform_fee: 0,
+        profit_margin: 0,
         banner_image: {},
+        banner_images: [],
       });
     }
 
@@ -18,11 +20,15 @@ const getSettings = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-
-// UPDATE Singleton Settings
 const updateSettings = async (req, res) => {
   try {
-    const { delivery_charge, platform_fee, banner_image } = req.body;
+    const {
+      delivery_charge,
+      platform_fee,
+      profit_margin,
+      banner_image,
+      banner_images,
+    } = req.body;
 
     let settings = await Settings.findOne();
 
@@ -31,13 +37,16 @@ const updateSettings = async (req, res) => {
       settings = new Settings({
         delivery_charge,
         platform_fee,
+        profit_margin,
         banner_image,
+        banner_images,
       });
     } else {
       // Update existing settings
       settings.delivery_charge = delivery_charge ?? settings.delivery_charge;
       settings.platform_fee = platform_fee ?? settings.platform_fee;
-      settings.banner_image = banner_image ?? settings.banner_image;
+      settings.profit_margin = profit_margin ?? settings.profit_margin;
+      settings.banner_images = banner_images ?? settings.banner_images;
     }
 
     const savedSettings = await settings.save();

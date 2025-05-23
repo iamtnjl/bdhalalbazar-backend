@@ -16,7 +16,11 @@ const SettingsSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-    banner_image: { type: ImageSchema },
+    profit_margin: {
+      type: Number,
+      default: 0,
+    },
+    banner_images: [{ type: ImageSchema }],
   },
   { timestamps: true, toJSON: { getters: true } }
 );

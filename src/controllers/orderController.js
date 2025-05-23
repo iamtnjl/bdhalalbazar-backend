@@ -3,6 +3,7 @@ const Cart = require("../models/cartModel.js");
 const Settings = require("../models/settingsModel.js");
 const User = require("../models/userModel.js");
 const Product = require("../models/productModel.js");
+const Category = require("../models/categoryModel.js");
 const mongoose = require("mongoose");
 const paginate = require("../utils/pagination.js");
 const { adminMessaging } = require("../config/firebase.js");
@@ -168,7 +169,7 @@ const placeOrder = async (req, res) => {
 // Function to get orders for the logged-in user based on phone number
 const getOrders = async (req, res) => {
   try {
-    const userPhone = req.user.phone;
+    const userPhone = req.user?.phone;
     if (!userPhone) {
       return res.status(401).json({
         message: "User is not authenticated or phone number is missing",
@@ -184,7 +185,7 @@ const getOrders = async (req, res) => {
     }
 
     if (status) {
-      query["status"] = {
+      query.status = {
         $elemMatch: {
           slug: status,
           stage: { $in: ["current"] },
@@ -192,29 +193,85 @@ const getOrders = async (req, res) => {
       };
     }
 
-    const paginatedOrders = await paginate(Order, query, req, [], {
-      createdAt: -1,
+    const settings = await Settings.findOne();
+    const profitMargin = settings?.profit_margin || 0;
+    const deliveryChargeDefault = settings?.delivery_charge || 0;
+    const platformFeeDefault = settings?.platform_fee || 0;
+
+    const profitCategories = await Category.find({
+      slug: { $in: ["vegetable", "meat", "beef", "mutton", "chicken", "fish"] },
     });
+    const profitCategoryIds = profitCategories.map((cat) => cat._id.toString());
+
+    const paginatedOrders = await paginate(
+      Order,
+      query,
+      req,
+      ["items._id"],
+      { createdAt: -1 },
+      { "items._id": "items.product" }
+    );
 
     paginatedOrders.results = paginatedOrders.results.map((order) => {
-      const currentStatus = order.status.find((s) =>
-        s.stage.includes("current")
+      const currentStatus = Array.isArray(order.status)
+        ? order.status.find((s) => s?.stage === "current")
+        : null;
+
+      let subtotal = 0;
+
+      if (Array.isArray(order.items)) {
+        order.items.forEach((item) => {
+          const product = item.product;
+          if (!product) return;
+
+          const categories = product.categories || [];
+          const isProfitApplied = categories.some((cat) =>
+            profitCategoryIds.includes(cat._id?.toString())
+          );
+
+          const basePrice = product.price || 0;
+          const discount = product.discount || 0;
+
+          const priceWithProfit = isProfitApplied
+            ? basePrice + (basePrice * profitMargin) / 100
+            : basePrice;
+
+          const discountedPrice =
+            priceWithProfit - (priceWithProfit * discount) / 100;
+
+          subtotal += discountedPrice * item.quantity;
+        });
+      }
+
+      const delivery_charge =
+        typeof order.delivery_charge === "number"
+          ? order.delivery_charge
+          : deliveryChargeDefault;
+
+      const platform_fee =
+        typeof order.platform_fee === "number"
+          ? order.platform_fee
+          : platformFeeDefault;
+
+      const grand_total = parseFloat(
+        (subtotal + delivery_charge + platform_fee).toFixed(2)
       );
+
       return {
         _id: order._id,
         order_id: order.order_id,
         createdAt: order.createdAt,
         status: currentStatus ? currentStatus.name : "unknown",
-        grand_total: order.grand_total,
+        grand_total,
       };
     });
 
     res.status(200).json(paginatedOrders);
   } catch (error) {
-    console.error(error);
+    console.error("Error in getOrders:", error);
     res.status(500).json({
       message: "An error occurred while fetching orders",
-      error,
+      error: error.message || error.toString(),
     });
   }
 };
@@ -225,7 +282,7 @@ const getAllOrders = async (req, res) => {
 
     let query = {};
 
-    // 🔍 Search by phone or order_id (case-insensitive partial match)
+    // 🔍 Search by phone or order_id
     if (search) {
       query.$or = [
         { phone: { $regex: search, $options: "i" } },
@@ -233,18 +290,78 @@ const getAllOrders = async (req, res) => {
       ];
     }
 
-    // 🎯 Filter by order status (e.g., 'pending', 'delivered')
+    // 🎯 Filter by current status
     if (status) {
       query.status = {
         $elemMatch: {
           slug: status,
-          stage: "current", // Match only if the stage is "current"
+          stage: "current",
         },
       };
     }
 
-    const paginatedData = await paginate(Order, query, req, [], {
-      createdAt: -1,
+    // Get profit settings
+    const profitCategorySlugs = [
+      "vegetable",
+      "meat",
+      "beef",
+      "mutton",
+      "chicken",
+      "fish",
+    ];
+    const profitCategories = await Category.find({
+      slug: { $in: profitCategorySlugs },
+    });
+    const profitCategoryIds = profitCategories.map((cat) => cat._id.toString());
+
+    const settings = await Settings.findOne();
+    const profitMargin = settings?.profit_margin || 0;
+
+    // Paginate orders
+    const paginatedData = await paginate(
+      Order,
+      query,
+      req,
+      ["items._id"],
+      { createdAt: -1 },
+      { "items._id": "items.product" }
+    );
+
+    // Recalculate grand_total per order
+    paginatedData.results = paginatedData.results.map((order) => {
+      let itemsTotal = 0;
+
+      order.items?.forEach((item) => {
+        const product = item.product;
+        const quantity = item.quantity ?? 1;
+
+        if (!product || typeof product !== "object") return;
+
+        const isProfitApplied = product.categories?.some((cat) =>
+          profitCategoryIds.includes(cat._id?.toString())
+        );
+
+        const basePrice = product.price ?? 0;
+        const priceWithProfit = isProfitApplied
+          ? parseFloat(
+              (basePrice + (basePrice * profitMargin) / 100).toFixed(2)
+            )
+          : basePrice;
+
+        const discountedPrice =
+          priceWithProfit - (priceWithProfit * (product.discount || 0)) / 100;
+
+        itemsTotal += discountedPrice * quantity;
+      });
+
+      const deliveryCharge = order.delivery_charge || 0;
+      const platformFee = order.platform_fee || 0;
+
+      order.grand_total = parseFloat(
+        (itemsTotal + deliveryCharge + platformFee).toFixed(2)
+      );
+
+      return order;
     });
 
     return res.status(200).json(paginatedData);
@@ -266,9 +383,9 @@ const getOrderDetails = async (req, res) => {
         model: "Product",
         populate: [
           { path: "brand", select: "name" },
-          { path: "materials", select: "name" },
-          { path: "colors", select: "name" },
-          { path: "categories", select: "name" },
+          { path: "materials", select: "name slug" },
+          { path: "colors", select: "name slug" },
+          { path: "categories", select: "name slug" },
         ],
       })
       .lean();
@@ -277,36 +394,84 @@ const getOrderDetails = async (req, res) => {
       return res.status(404).json({ message: "Order not found" });
     }
 
-    // Map product items
-    order.products = order.items.map((item) => ({
-      product: item._id,
-      quantity: item.quantity,
-      price: item.price,
-      discount_price: item.discount_price,
-      total_price: item.total_price,
-      weight: item.weight,
-      unit: item.unit,
-    }));
+    const settings = await Settings.findOne();
+    const profitPercentage = settings?.profit_margin || 0;
+    const profitCategoryIds = (settings?.profit_categories || []).map((id) =>
+      id.toString()
+    );
+    let delivery_charge = settings?.delivery_charge || 0;
+    const platform_fee = settings?.platform_fee || 0;
 
-    order.isPriceEdited = order.items.some((item) => {
-      const price = item.price ?? 0;
-      const discount_price = item.discount_price ?? 0;
-      const quantity = item.quantity ?? 1;
-      const total_price = item.total_price ?? 0;
+    const specialCategorySlugs = [
+      "vegetable",
+      "meat",
+      "beef",
+      "mutton",
+      "chicken",
+      "fish",
+    ];
 
-      const expectedTotal =
-        (discount_price > 0 ? discount_price : price) * quantity;
+    function shouldApplyProfit(product) {
+      const categoryIds =
+        product.categories?.map((cat) => cat._id?.toString()) || [];
+      const categorySlugs = product.categories?.map((cat) => cat.slug) || [];
 
-      return Math.round(expectedTotal) !== Math.round(total_price);
+      return (
+        categoryIds.some((id) => profitCategoryIds.includes(id)) ||
+        categorySlugs.some((slug) => specialCategorySlugs.includes(slug))
+      );
+    }
+
+    let sub_total = 0;
+    let discount_total = 0;
+    let grand_total = 0;
+
+    order.products = order.items.map((item) => {
+      const product = item._id;
+      const quantity = item.quantity || 1;
+
+      let basePrice = product?.price || 0;
+      const discount = product?.discount || 0;
+
+      // Apply profit margin to base price
+      if (shouldApplyProfit(product)) {
+        basePrice += (basePrice * profitPercentage) / 100;
+      }
+
+      // Set the modified price into the product object directly
+      product.price = parseFloat(basePrice.toFixed(2));
+
+      const discountPrice = basePrice - (basePrice * discount) / 100;
+      const totalPrice = discountPrice * quantity;
+
+      sub_total += basePrice * quantity;
+      discount_total += (basePrice - discountPrice) * quantity;
+      grand_total += totalPrice;
+
+      return {
+        product,
+        quantity,
+        price: parseFloat(basePrice.toFixed(2)),
+        discount_price: parseFloat(discountPrice.toFixed(2)),
+        total_price: parseFloat(totalPrice.toFixed(2)),
+        weight: item.weight,
+        unit: item.unit,
+      };
     });
 
-    order.calculated_total_price = order.items.reduce(
-      (sum, item) => sum + (item.total_price ?? 0),
-      0
-    );
+    order.sub_total = parseFloat(sub_total.toFixed(2));
+    order.discount = parseFloat(discount_total.toFixed(2));
+    order.grand_total =
+      parseFloat(grand_total.toFixed(2)) + platform_fee + delivery_charge;
+    order.calculated_total_price = order.grand_total;
+
+    order.isPriceEdited = order.products.some((item) => {
+      const expected = item.discount_price * item.quantity;
+      return Math.round(expected) !== Math.round(item.total_price);
+    });
+
     delete order.items;
 
-    // Filter and transform statuses
     const failedStatuses = [
       "rejected",
       "canceled",
@@ -317,7 +482,6 @@ const getOrderDetails = async (req, res) => {
     let showCanceled = false;
     let canceledTimestamp = null;
 
-    // Loop through all statuses to check if we should show 'Canceled'
     for (const status of order.status) {
       if (failedStatuses.includes(status.slug) && status.stage === "current") {
         showCanceled = true;
@@ -326,12 +490,10 @@ const getOrderDetails = async (req, res) => {
       }
     }
 
-    // Filter out failed statuses
     const filteredStatus = order.status.filter(
       (status) => !failedStatuses.includes(status.slug)
     );
 
-    // Append synthetic "Canceled" status if needed
     if (showCanceled) {
       filteredStatus.push({
         name: "Canceled",
@@ -360,49 +522,83 @@ const getAdminOrderDetails = async (req, res) => {
           { path: "brand", select: "name" },
           { path: "materials", select: "name" },
           { path: "colors", select: "name" },
-          { path: "categories", select: "name" },
+          { path: "categories", select: "name slug" },
         ],
       })
-      .lean(); // Converts Mongoose document to plain JSON
+      .lean();
 
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
 
-    order.products = order.items.map((item) => ({
-      product: item._id,
-      quantity: item.quantity,
-      price: item.price,
-      discount_price: item.discount_price,
-      total_price: item.total_price,
-      purchase_price: item.purchase_price,
-      weight: item.weight,
-      unit: item.unit,
-    }));
+    const settings = await Settings.findOne();
+    const profitMargin = settings?.profit_margin || 0;
+    const deliveryCharge = order.delivery_charge || 0;
+    const platformFee = order.platform_fee || 0;
 
+    const profitCategorySlugs = [
+      "vegetable",
+      "meat",
+      "beef",
+      "mutton",
+      "chicken",
+      "fish",
+    ];
+    const profitCategories = await Category.find({
+      slug: { $in: profitCategorySlugs },
+    });
+    const profitCategoryIds = profitCategories.map((cat) => cat._id.toString());
+
+    let calculatedTotal = 0;
+
+    order.products = order.items.map((item) => {
+      const product = item._id;
+      const quantity = item.quantity ?? 1;
+
+      const isProfitApplied = product.categories?.some((cat) =>
+        profitCategoryIds.includes(cat._id.toString())
+      );
+
+      const basePrice = product.price ?? 0;
+      const priceWithMargin = isProfitApplied
+        ? parseFloat((basePrice + (basePrice * profitMargin) / 100).toFixed(2))
+        : basePrice;
+
+      const discountedPrice =
+        priceWithMargin - (priceWithMargin * (product.discount || 0)) / 100;
+      const totalPrice = discountedPrice * quantity;
+
+      calculatedTotal += totalPrice;
+
+      return {
+        product,
+        quantity,
+        price: priceWithMargin,
+        discount_price: discountedPrice,
+        total_price: totalPrice,
+        purchase_price: item.purchase_price,
+        weight: item.weight,
+        unit: item.unit,
+      };
+    });
+
+    order.grand_total = calculatedTotal + deliveryCharge + platformFee;
+
+    // Other fields
     order.total_purchase_price = order.items.reduce(
       (sum, item) => sum + (item.purchase_price ?? 0),
       0
     );
 
-    order.isPriceEdited = order.items.some((item) => {
-      const price = item.price ?? 0;
-      const discount_price = item.discount_price ?? 0;
-      const quantity = item.quantity ?? 1;
-      const total_price = item.total_price ?? 0;
-
-      const expectedTotal =
-        (discount_price > 0 ? discount_price : price) * quantity;
-
-      return Math.round(expectedTotal) !== Math.round(total_price);
+    order.isPriceEdited = order.products.some((item) => {
+      const expected = Math.round(item.total_price);
+      const actual = Math.round(item.total_price); // Same here since recalculated
+      return expected !== actual;
     });
 
-    order.calculated_total_price = order.items.reduce(
-      (sum, item) => sum + (item.total_price ?? 0),
-      0
-    );
+    order.calculated_total_price = calculatedTotal;
 
-    // Remove the original "items" field
+    // Cleanup
     delete order.items;
 
     res.json(order);

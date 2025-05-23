@@ -1,8 +1,10 @@
 const Cart = require("../models/cartModel");
 const Product = require("../models/productModel");
 const Settings = require("../models/settingsModel");
+const Category = require("../models/categoryModel");
 const Order = require("../models/orderModel");
-const paginate = require("../utils/pagination");
+
+const { applyProfitMargin, applyDiscount } = require("../utils/price");
 
 const addOrUpdateCart = async (req, res) => {
   try {
@@ -15,8 +17,24 @@ const addOrUpdateCart = async (req, res) => {
       ? req.body.cart
       : [req.body.cart];
 
-    let cart = await Cart.findOne({ deviceId });
+    // Fetch profit margin and profit categories once
+    const settings = await Settings.findOne();
+    const profitMargin = settings?.profit_margin || 0;
 
+    const profitCategorySlugs = [
+      "vegetable",
+      "meat",
+      "beef",
+      "mutton",
+      "chicken",
+      "fish",
+    ];
+    const profitCategories = await Category.find({
+      slug: { $in: profitCategorySlugs },
+    });
+    const profitCategoryIds = profitCategories.map((cat) => cat._id.toString());
+
+    let cart = await Cart.findOne({ deviceId });
     if (!cart) {
       cart = new Cart({ deviceId, cart_products: [] });
     }
@@ -28,26 +46,40 @@ const addOrUpdateCart = async (req, res) => {
           .json({ message: "Invalid productId or quantity" });
       }
 
-      const product = await Product.findById(productId);
+      const product = await Product.findById(productId).populate("categories");
       if (!product) {
         return res
           .status(404)
           .json({ message: `Product ${productId} not found` });
       }
 
+      // Check if product category requires profit margin
+      const isProfitApplied = product.categories.some((cat) =>
+        profitCategoryIds.includes(cat._id.toString())
+      );
+
+      // Apply profit margin if needed
+      const basePrice = product.price;
+      const priceWithProfit = isProfitApplied
+        ? parseFloat((basePrice + (basePrice * profitMargin) / 100).toFixed(2))
+        : basePrice;
+
+      // Calculate final price after discount
+      const discountPercent = product.discount || 0;
+      const finalPrice =
+        quantity *
+        (priceWithProfit - (priceWithProfit * discountPercent) / 100);
+
       const productIndex = cart.cart_products.findIndex(
         (item) => item.product.toString() === productId
       );
-
-      const final_price =
-        quantity * (product.price - (product.price * product.discount) / 100);
 
       if (productIndex !== -1) {
         if (quantity === 0) {
           cart.cart_products.splice(productIndex, 1);
         } else {
           cart.cart_products[productIndex].quantity = quantity;
-          cart.cart_products[productIndex].final_price = final_price;
+          cart.cart_products[productIndex].final_price = finalPrice;
           cart.cart_products[productIndex].weight = product.weight;
           cart.cart_products[productIndex].unit = product.unit;
         }
@@ -56,15 +88,13 @@ const addOrUpdateCart = async (req, res) => {
           cart.cart_products.push({
             product: productId,
             quantity,
-            final_price,
+            final_price: finalPrice,
             weight: product.weight,
             unit: product.unit,
           });
         }
       }
     }
-
-    await cart.save();
 
     // Populate product + nested references
     await cart.populate({
@@ -77,19 +107,39 @@ const addOrUpdateCart = async (req, res) => {
       ],
     });
 
-    // Recalculate totals
-    cart.sub_total = cart.cart_products.reduce(
-      (sum, item) => sum + (item.product?.price || 0) * item.quantity,
-      0
-    );
+    // Recalculate totals with profit margin included
+    cart.sub_total = cart.cart_products.reduce((sum, item) => {
+      const prod = item.product;
+      if (!prod) return sum;
+
+      const isProfitApplied = prod.categories.some((cat) =>
+        profitCategoryIds.includes(cat._id.toString())
+      );
+
+      const basePrice = prod.price;
+      const priceWithProfit = isProfitApplied
+        ? parseFloat((basePrice + (basePrice * profitMargin) / 100).toFixed(2))
+        : basePrice;
+
+      return sum + priceWithProfit * item.quantity;
+    }, 0);
 
     cart.discount = cart.cart_products.reduce((sum, item) => {
-      const discounted_price =
-        item.product?.price -
-        (item.product?.price * item.product?.discount) / 100;
-      const discount = item.product?.price - discounted_price;
+      const prod = item.product;
+      if (!prod) return sum;
 
-      return sum + discount * item.quantity;
+      const isProfitApplied = prod.categories.some((cat) =>
+        profitCategoryIds.includes(cat._id.toString())
+      );
+
+      const basePrice = prod.price;
+      const priceWithProfit = isProfitApplied
+        ? parseFloat((basePrice + (basePrice * profitMargin) / 100).toFixed(2))
+        : basePrice;
+
+      const discountAmount =
+        priceWithProfit - priceWithProfit * ((prod.discount || 0) / 100);
+      return sum + discountAmount * item.quantity;
     }, 0);
 
     cart.grand_total = cart.cart_products.reduce(
@@ -110,6 +160,7 @@ const addOrUpdateCart = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("addOrUpdateCart error:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -122,14 +173,14 @@ const getCart = async (req, res) => {
       return res.status(400).json({ message: "Device ID is required" });
     }
 
-    // Fetch cart with product and nested refs
+    // Fetch cart with populated product and nested references
     let cart = await Cart.findOne({ deviceId }).populate({
       path: "cart_products.product",
       populate: [
         { path: "brand", select: "name" },
         { path: "colors", select: "name" },
         { path: "materials", select: "name" },
-        { path: "categories", select: "name" },
+        { path: "categories", select: "name slug" }, // include slug to check categories
       ],
     });
 
@@ -141,6 +192,7 @@ const getCart = async (req, res) => {
     }
 
     const settings = await Settings.findOne();
+    const profitMargin = settings?.profit_margin || 0;
     let delivery_charge = settings?.delivery_charge || 0;
     const platform_fee = settings?.platform_fee || 0;
 
@@ -150,34 +202,66 @@ const getCart = async (req, res) => {
       delivery_charge = 0;
     }
 
-    // Calculate final prices
+    // Profit categories slugs (same as before)
+    const profitCategorySlugs = [
+      "vegetable",
+      "meat",
+      "beef",
+      "mutton",
+      "chicken",
+      "fish",
+    ];
+    const profitCategories = await Category.find({
+      slug: { $in: profitCategorySlugs },
+    });
+    const profitCategoryIds = profitCategories.map((cat) => cat._id.toString());
+
     cart.cart_products = cart.cart_products.map((item) => {
+      const product = item.product;
+
+      const isProfitApplied = product.categories.some((cat) =>
+        profitCategoryIds.includes(cat._id.toString())
+      );
+
+      const basePrice = product.price;
+      const priceWithProfit = isProfitApplied
+        ? parseFloat((basePrice + (basePrice * profitMargin) / 100).toFixed(2))
+        : basePrice;
+
+      // Update product.price with profit-adjusted price
+      product.price = priceWithProfit;
+
       const discounted_price =
-        item.product?.price -
-        (item.product?.price * item.product?.discount) / 100;
-      item.final_price = discounted_price * item.quantity;
+        priceWithProfit - (priceWithProfit * product.discount) / 100;
+
+      item.final_price = parseFloat(
+        (discounted_price * item.quantity).toFixed(2)
+      );
+      item.discountAmount = parseFloat(
+        (((priceWithProfit * product.discount) / 100) * item.quantity).toFixed(
+          2
+        )
+      );
+
       return item;
     });
 
-    cart.sub_total = cart.cart_products.reduce(
-      (sum, item) => sum + (item.product?.price || 0) * item.quantity,
-      0
-    );
-
-    cart.discount = cart.cart_products.reduce((sum, item) => {
-      const discounted_price =
-        item.product?.price -
-        (item.product?.price * item.product?.discount) / 100;
-      const discount = item.product?.price - discounted_price;
-      return sum + discount * item.quantity;
+    cart.sub_total = cart.cart_products.reduce((sum, item) => {
+      const product = item.product;
+      if (!product) return sum;
+      // Subtotal = sum of (priceWithProfit * quantity)
+      return sum + product.price * item.quantity;
     }, 0);
 
-    cart.grand_total = cart.cart_products.reduce(
-      (sum, item) => sum + item.final_price,
-      0
-    );
+    cart.discount = cart.cart_products.reduce((sum, item) => {
+      return sum + (item.discountAmount || 0);
+    }, 0);
 
-    // Add delivery_charge and platform_fee to grand_total
+    cart.grand_total = cart.cart_products.reduce((sum, item) => {
+      return sum + item.final_price;
+    }, 0);
+
+    // Add delivery charge and platform fee
     cart.grand_total += delivery_charge + platform_fee;
 
     await cart.save();
