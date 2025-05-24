@@ -44,10 +44,37 @@ const placeOrder = async (req, res) => {
 
     // Fetch settings
 
-    const previousOrder = await Order.findOne({ deviceId: cart.deviceId });
     const settings = await Settings.findOne();
-    const delivery_charge = previousOrder ? settings?.delivery_charge : 0;
+
     const platform_fee = settings?.platform_fee || 0;
+
+    let delivery_charge = settings?.delivery_charge || 0;
+
+    // Check token
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      try {
+        const token = authHeader.split(" ")[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+        if (decoded?.phone) {
+          const previousOrder = await Order.findOne({ phone: decoded.phone });
+
+          if (!previousOrder) {
+            delivery_charge = 0; // waive delivery charge for returning user
+          }
+        }
+      } catch (err) {
+        console.error("Invalid token", err.message);
+        // optionally return 401 or continue silently
+      }
+    } else {
+      // Fallback to device-based check
+      const previousOrder = await Order.findOne({ deviceId: cart.deviceId });
+      if (!previousOrder) {
+        delivery_charge = 0;
+      }
+    }
 
     // Subtotal and discount calculations
     cart.sub_total = cart.cart_products.reduce(
