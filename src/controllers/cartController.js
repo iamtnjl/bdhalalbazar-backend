@@ -196,7 +196,7 @@ const getCart = async (req, res) => {
     let delivery_charge = settings?.delivery_charge || 0;
     const platform_fee = settings?.platform_fee || 0;
 
-    // Check token
+    // Check token for order
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith("Bearer ")) {
       try {
