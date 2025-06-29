@@ -19,7 +19,7 @@ const OrderSchema = new mongoose.Schema(
     delivery_charge: { type: Number, required: true },
     platform_fee: { type: Number, required: true },
 
-    // Order Items
+    // Order Items (updated!)
     items: [
       {
         _id: {
@@ -28,10 +28,11 @@ const OrderSchema = new mongoose.Schema(
           required: true,
         },
         quantity: { type: Number, required: true },
-        price: { type: Number, required: true },
-        discount_price: { type: Number, required: true },
-        total_price: { type: Number, required: true },
-        purchase_price: { type: Number, required: false },
+        base_price: { type: Number, required: true }, // original DB price at time of order
+        selling_price: { type: Number, required: true }, // after tag margin logic or MRP
+        discounted_price: { type: Number, required: true }, // after discount
+        total_price: { type: Number, required: true }, // discounted * quantity
+        purchase_price: { type: Number, required: false }, // optional
         weight: { type: Number, default: 0 },
         unit: {
           type: String,
@@ -40,11 +41,13 @@ const OrderSchema = new mongoose.Schema(
         },
       },
     ],
+
     total_purchase_price: { type: Number, required: true, default: 0 },
 
     sub_total: { type: Number, required: true },
     discount: { type: Number, required: true },
     grand_total: { type: Number, required: true },
+    profit: { type: Number, required: true, default: 0 },
     review: { type: String, default: "" },
     rating: { type: Number, min: 1, max: 5, default: null },
     edit_reason: { type: String, default: "" },
@@ -76,14 +79,14 @@ const OrderSchema = new mongoose.Schema(
           enum: ["current", "pending", "completed"],
           required: true,
         },
-        updatedAt: { type: Date, default: Date.now }, // Track when status was updated
+        updatedAt: { type: Date, default: Date.now },
       },
     ],
   },
   { timestamps: true }
 );
 
-// Function to update order status dynamically
+// Status method (unchanged)
 OrderSchema.methods.updateStatus = function (newStatus) {
   const statusStages = [
     "pending",

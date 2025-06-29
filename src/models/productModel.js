@@ -13,10 +13,22 @@ const ImageSchema = new mongoose.Schema({
 
 const ProductSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
+    name: {
+      en: { type: String, required: true },
+      bn: { type: String, required: true },
+    },
+    description: {
+      en: { type: String },
+      bn: { type: String },
+    },
     price: {
       type: Number,
       required: true,
+      set: (val) => parseFloat(val).toFixed(2),
+      get: (val) => (val % 1 === 0 ? parseInt(val) : parseFloat(val)),
+    },
+    mrp_price: {
+      type: Number,
       set: (val) => parseFloat(val).toFixed(2),
       get: (val) => (val % 1 === 0 ? parseInt(val) : parseFloat(val)),
     },
@@ -36,6 +48,12 @@ const ProductSchema = new mongoose.Schema(
     ],
     materials: [{ type: mongoose.Schema.Types.ObjectId, ref: "Material" }],
     categories: [{ type: mongoose.Schema.Types.ObjectId, ref: "Category" }],
+    subCategory: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SubCategory",
+    },
+    tags: [{ type: mongoose.Schema.Types.ObjectId, ref: "Tag" }],
+    searchTerms: [{ type: String }],
     colors: [{ type: mongoose.Schema.Types.ObjectId, ref: "Colors" }],
     primary_image: { type: ImageSchema },
     images: [ImageSchema],
@@ -64,16 +82,37 @@ const ProductSchema = new mongoose.Schema(
     },
     ad_pixel_id: { type: String, default: null },
     manufacturer: { type: String },
-    description: { type: String },
   },
   { timestamps: true, toJSON: { getters: true } }
 );
 
-// Mongoose pre-save hook to generate the stock_id before saving
-ProductSchema.pre('save', async function (next) {
+// Pre-save hook to generate stock_id and populate searchTerms
+ProductSchema.pre("save", async function (next) {
   if (!this.stock_id) {
     this.stock_id = await generateId();
   }
+
+  // Make sure searchTerms exists
+  if (!this.searchTerms) {
+    this.searchTerms = [];
+  }
+
+  // Always add name.en
+  if (this.name?.en) {
+    const term = this.name.en.toLowerCase();
+    if (!this.searchTerms.includes(term)) {
+      this.searchTerms.push(term);
+    }
+  }
+
+  // Always add name.bn
+  if (this.name?.bn) {
+    const term = this.name.bn.toLowerCase();
+    if (!this.searchTerms.includes(term)) {
+      this.searchTerms.push(term);
+    }
+  }
+
   next();
 });
 

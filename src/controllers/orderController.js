@@ -24,6 +24,7 @@ const placeOrder = async (req, res) => {
         { path: "colors", select: "name" },
         { path: "materials", select: "name" },
         { path: "categories", select: "name" },
+        { path: "tags", select: "name margin" },
       ],
     });
 
@@ -38,82 +39,78 @@ const placeOrder = async (req, res) => {
         address: [address],
         status: "placeholder",
       });
-
       await user.save();
     }
 
-    // Fetch settings
-
     const settings = await Settings.findOne();
-
     const platform_fee = settings?.platform_fee || 0;
+    const delivery_charge = settings?.delivery_charge || 0;
 
-    let delivery_charge = settings?.delivery_charge || 0;
+    // Compute item-level prices snapshot
+    const orderItems = cart.cart_products.map((item) => {
+      const product = item.product;
 
-    // Check token
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      try {
-        const token = authHeader.split(" ")[1];
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const basePrice = product.price;
 
-        if (decoded?.phone) {
-          const previousOrder = await Order.findOne({ phone: decoded.phone });
+      const hasMRPTag = product.tags?.some(
+        (tag) => tag.name?.toLowerCase() === "mrp"
+      );
 
-          if (!previousOrder) {
-            delivery_charge = 0; // waive delivery charge for returning user
-          }
-        }
-      } catch (err) {
-        console.error("Invalid token", err.message);
-        // optionally return 401 or continue silently
+      let sellingPrice;
+
+      if (hasMRPTag && product.mrp_price) {
+        sellingPrice = product.mrp_price;
+      } else {
+        const tagMargins =
+          product.tags?.length > 0
+            ? product.tags.map((t) => t.margin || 0)
+            : [0];
+        const maxMargin = Math.max(...tagMargins);
+        sellingPrice = basePrice + (basePrice * maxMargin) / 100;
       }
-    } else {
-      // Fallback to device-based check
-      const previousOrder = await Order.findOne({ deviceId: cart.deviceId });
-      if (!previousOrder) {
-        delivery_charge = 0;
-      }
-    }
 
-    // Subtotal and discount calculations
-    cart.sub_total = cart.cart_products.reduce(
-      (sum, item) => sum + (item.product?.price || 0) * item.quantity,
+      const discountPercent = product.discount || 0;
+      const discountedPrice =
+        sellingPrice - (sellingPrice * discountPercent) / 100;
+
+      return {
+        _id: product._id,
+        quantity: item.quantity,
+        base_price: parseFloat(basePrice.toFixed(2)),
+        selling_price: parseFloat(sellingPrice.toFixed(2)),
+        discounted_price: parseFloat(discountedPrice.toFixed(2)),
+        total_price: parseFloat((discountedPrice * item.quantity).toFixed(2)),
+        weight: product.weight,
+        unit: product.unit,
+      };
+    });
+
+    const sub_total = orderItems.reduce(
+      (sum, item) => sum + item.selling_price * item.quantity,
       0
     );
 
-    cart.discount = cart.cart_products.reduce((sum, item) => {
-      const discounted_price =
-        item.product?.price -
-        (item.product?.price * item.product?.discount) / 100;
-      const discount = item.product?.price - discounted_price;
-      return sum + discount * item.quantity;
-    }, 0);
+    const total_base_price = orderItems.reduce(
+      (sum, item) => sum + item.base_price * item.quantity,
+      0
+    );
 
-    cart.grand_total =
-      cart.sub_total - cart.discount + delivery_charge + platform_fee;
+    const discount = orderItems.reduce(
+      (sum, item) =>
+        sum + (item.selling_price - item.discounted_price) * item.quantity,
+      0
+    );
+    const grand_total = sub_total - discount + delivery_charge + platform_fee;
+    const profit = grand_total - total_base_price;
 
-    const orderItems = cart.cart_products.map((item) => ({
-      _id: item.product._id,
-      quantity: item.quantity,
-      price: item.product.price,
-      weight: item.product.weight,
-      unit: item.product.unit,
-      discount_price:
-        item.product.price - (item.product.price * item.product.discount) / 100,
-      total_price:
-        (item.product.price -
-          (item.product.price * item.product.discount) / 100) *
-        item.quantity,
-    }));
-
+    // Deduct stock
     for (const item of cart.cart_products) {
       await Product.findByIdAndUpdate(item.product._id, {
         $inc: { stock: -item.quantity },
       });
     }
 
-    const count = await mongoose.model("Order").countDocuments();
+    const count = await Order.countDocuments();
 
     const newOrder = new Order({
       order_id: `${count + 1}`,
@@ -125,9 +122,10 @@ const placeOrder = async (req, res) => {
       platform_fee,
       deviceId: cart.deviceId,
       items: orderItems,
-      sub_total: cart.sub_total,
-      discount: cart.discount,
-      grand_total: cart.grand_total,
+      sub_total,
+      discount,
+      grand_total,
+      profit,
       status: [
         { name: "Pending", slug: "pending", stage: "current" },
         { name: "Accepted", slug: "accepted", stage: "pending" },
@@ -151,6 +149,8 @@ const placeOrder = async (req, res) => {
 
     await newOrder.save();
     await Cart.findByIdAndDelete(cart_id);
+
+    // Send push notifications to admins
     const adminUsers = await User.find({
       role: "admin",
       fcm_token: { $exists: true, $ne: null },
@@ -159,11 +159,28 @@ const placeOrder = async (req, res) => {
     if (adminUsers.length > 0) {
       const notifications = adminUsers.map((adminUser) => {
         const message = {
+          token: adminUser.fcm_token,
           notification: {
             title: "New Order Placed!",
             body: `Order #${newOrder.order_id} placed by ${name}`,
           },
-          token: adminUser.fcm_token,
+          data: {
+            order_id: newOrder._id.toString(),
+            type: "order_placed",
+          },
+          android: {
+            notification: {
+              sound: "default",
+              click_action: "FLUTTER_NOTIFICATION_CLICK",
+            },
+          },
+          apns: {
+            payload: {
+              aps: {
+                sound: "default",
+              },
+            },
+          },
           webpush: {
             notification: {
               icon: "/logo/logo.png",
@@ -178,10 +195,7 @@ const placeOrder = async (req, res) => {
       try {
         await Promise.all(notifications);
       } catch (err) {
-        console.error(
-          "Error sending FCM notifications to admins:",
-          err.message
-        );
+        console.error("Error sending FCM notifications:", err.message);
       }
     }
 
@@ -189,9 +203,11 @@ const placeOrder = async (req, res) => {
       .status(201)
       .json({ message: "Order placed successfully", order: newOrder });
   } catch (error) {
+    console.error("placeOrder error:", error);
     res.status(500).json({ message: error.message });
   }
 };
+
 // Get Order List (Search by Order ID & Filter by Status)
 // Function to get orders for the logged-in user based on phone number
 const getOrders = async (req, res) => {
@@ -220,16 +236,6 @@ const getOrders = async (req, res) => {
       };
     }
 
-    const settings = await Settings.findOne();
-    const profitMargin = settings?.profit_margin || 0;
-    const deliveryChargeDefault = settings?.delivery_charge || 0;
-    const platformFeeDefault = settings?.platform_fee || 0;
-
-    const profitCategories = await Category.find({
-      slug: { $in: ["vegetable", "meat", "beef", "mutton", "chicken", "fish"] },
-    });
-    const profitCategoryIds = profitCategories.map((cat) => cat._id.toString());
-
     const paginatedOrders = await paginate(
       Order,
       query,
@@ -244,52 +250,12 @@ const getOrders = async (req, res) => {
         ? order.status.find((s) => s?.stage === "current")
         : null;
 
-      let subtotal = 0;
-
-      if (Array.isArray(order.items)) {
-        order.items.forEach((item) => {
-          const product = item.product;
-          if (!product) return;
-
-          const categories = product.categories || [];
-          const isProfitApplied = categories.some((cat) =>
-            profitCategoryIds.includes(cat._id?.toString())
-          );
-
-          const basePrice = product.price || 0;
-          const discount = product.discount || 0;
-
-          const priceWithProfit = isProfitApplied
-            ? basePrice + (basePrice * profitMargin) / 100
-            : basePrice;
-
-          const discountedPrice =
-            priceWithProfit - (priceWithProfit * discount) / 100;
-
-          subtotal += discountedPrice * item.quantity;
-        });
-      }
-
-      const delivery_charge =
-        typeof order.delivery_charge === "number"
-          ? order.delivery_charge
-          : deliveryChargeDefault;
-
-      const platform_fee =
-        typeof order.platform_fee === "number"
-          ? order.platform_fee
-          : platformFeeDefault;
-
-      const grand_total = parseFloat(
-        (subtotal + delivery_charge + platform_fee).toFixed(2)
-      );
-
       return {
         _id: order._id,
         order_id: order.order_id,
         createdAt: order.createdAt,
         status: currentStatus ? currentStatus.name : "unknown",
-        grand_total,
+        grand_total: order.grand_total,
       };
     });
 
@@ -327,23 +293,6 @@ const getAllOrders = async (req, res) => {
       };
     }
 
-    // Get profit settings
-    const profitCategorySlugs = [
-      "vegetable",
-      "meat",
-      "beef",
-      "mutton",
-      "chicken",
-      "fish",
-    ];
-    const profitCategories = await Category.find({
-      slug: { $in: profitCategorySlugs },
-    });
-    const profitCategoryIds = profitCategories.map((cat) => cat._id.toString());
-
-    const settings = await Settings.findOne();
-    const profitMargin = settings?.profit_margin || 0;
-
     // Paginate orders
     const paginatedData = await paginate(
       Order,
@@ -354,41 +303,10 @@ const getAllOrders = async (req, res) => {
       { "items._id": "items.product" }
     );
 
-    // Recalculate grand_total per order
     paginatedData.results = paginatedData.results.map((order) => {
-      let itemsTotal = 0;
-
-      order.items?.forEach((item) => {
-        const product = item.product;
-        const quantity = item.quantity ?? 1;
-
-        if (!product || typeof product !== "object") return;
-
-        const isProfitApplied = product.categories?.some((cat) =>
-          profitCategoryIds.includes(cat._id?.toString())
-        );
-
-        const basePrice = product.price ?? 0;
-        const priceWithProfit = isProfitApplied
-          ? parseFloat(
-              (basePrice + (basePrice * profitMargin) / 100).toFixed(2)
-            )
-          : basePrice;
-
-        const discountedPrice =
-          priceWithProfit - (priceWithProfit * (product.discount || 0)) / 100;
-
-        itemsTotal += discountedPrice * quantity;
-      });
-
-      const deliveryCharge = order.delivery_charge || 0;
-      const platformFee = order.platform_fee || 0;
-
-      order.grand_total = parseFloat(
-        (itemsTotal + deliveryCharge + platformFee).toFixed(2)
-      );
-
-      return order;
+      return {
+        ...order,
+      };
     });
 
     return res.status(200).json(paginatedData);
@@ -422,32 +340,8 @@ const getOrderDetails = async (req, res) => {
     }
 
     const settings = await Settings.findOne();
-    const profitPercentage = settings?.profit_margin || 0;
-    const profitCategoryIds = (settings?.profit_categories || []).map((id) =>
-      id.toString()
-    );
     let delivery_charge = settings?.delivery_charge || 0;
     const platform_fee = settings?.platform_fee || 0;
-
-    const specialCategorySlugs = [
-      "vegetable",
-      "meat",
-      "beef",
-      "mutton",
-      "chicken",
-      "fish",
-    ];
-
-    function shouldApplyProfit(product) {
-      const categoryIds =
-        product.categories?.map((cat) => cat._id?.toString()) || [];
-      const categorySlugs = product.categories?.map((cat) => cat.slug) || [];
-
-      return (
-        categoryIds.some((id) => profitCategoryIds.includes(id)) ||
-        categorySlugs.some((slug) => specialCategorySlugs.includes(slug))
-      );
-    }
 
     let sub_total = 0;
     let discount_total = 0;
@@ -457,29 +351,21 @@ const getOrderDetails = async (req, res) => {
       const product = item._id;
       const quantity = item.quantity || 1;
 
-      let basePrice = product?.price || 0;
-      const discount = product?.discount || 0;
+      const sellingPrice = item.selling_price ?? 0; // saved selling_price in `price` field
+      const discountedPrice = item.discounted_price ?? 0; // saved discounted_price
 
-      // Apply profit margin to base price
-      if (shouldApplyProfit(product)) {
-        basePrice += (basePrice * profitPercentage) / 100;
-      }
+      const totalPrice = item?.total_price;
 
-      // Set the modified price into the product object directly
-      product.price = parseFloat(basePrice.toFixed(2));
-
-      const discountPrice = basePrice - (basePrice * discount) / 100;
-      const totalPrice = discountPrice * quantity;
-
-      sub_total += basePrice * quantity;
-      discount_total += (basePrice - discountPrice) * quantity;
+      // Accumulate totals based on saved prices
+      sub_total += sellingPrice * quantity;
+      discount_total += (sellingPrice - discountedPrice) * quantity;
       grand_total += totalPrice;
 
       return {
         product,
         quantity,
-        price: parseFloat(basePrice.toFixed(2)),
-        discount_price: parseFloat(discountPrice.toFixed(2)),
+        selling_price: sellingPrice,
+        discounted_price: discountedPrice,
         total_price: parseFloat(totalPrice.toFixed(2)),
         weight: item.weight,
         unit: item.unit,
@@ -493,8 +379,8 @@ const getOrderDetails = async (req, res) => {
     order.calculated_total_price = order.grand_total;
 
     order.isPriceEdited = order.products.some((item) => {
-      const expected = item.discount_price * item.quantity;
-      return Math.round(expected) !== Math.round(item.total_price);
+      const expected = item.product.weight !== item.weight;
+      return expected;
     });
 
     delete order.items;
@@ -558,74 +444,35 @@ const getAdminOrderDetails = async (req, res) => {
       return res.status(404).json({ message: "Order not found" });
     }
 
-    const settings = await Settings.findOne();
-    const profitMargin = settings?.profit_margin || 0;
-    const deliveryCharge = order.delivery_charge || 0;
-    const platformFee = order.platform_fee || 0;
-
-    const profitCategorySlugs = [
-      "vegetable",
-      "meat",
-      "beef",
-      "mutton",
-      "chicken",
-      "fish",
-    ];
-    const profitCategories = await Category.find({
-      slug: { $in: profitCategorySlugs },
-    });
-    const profitCategoryIds = profitCategories.map((cat) => cat._id.toString());
-
-    let calculatedTotal = 0;
-
+    // ✅ Use snapshot prices only — NO selling price
     order.products = order.items.map((item) => {
       const product = item._id;
       const quantity = item.quantity ?? 1;
 
-      const isProfitApplied = product.categories?.some((cat) =>
-        profitCategoryIds.includes(cat._id.toString())
-      );
-
-      const basePrice = product.price ?? 0;
-      const priceWithMargin = isProfitApplied
-        ? parseFloat((basePrice + (basePrice * profitMargin) / 100).toFixed(2))
-        : basePrice;
-
-      const discountedPrice =
-        priceWithMargin - (priceWithMargin * (product.discount || 0)) / 100;
-      const totalPrice = discountedPrice * quantity;
-
-      calculatedTotal += totalPrice;
+      const basePrice = item.base_price ?? 0; // if you saved it!
+      const discountedPrice = item.discounted_price ?? 0; // snapshot
+      const totalPrice = item.total_price ?? 0; // snapshot
+      const purchasePrice = basePrice * quantity ?? 0;
+      const sellingPrice = item.selling_price ?? 0;
 
       return {
         product,
         quantity,
-        price: priceWithMargin,
-        discount_price: discountedPrice,
+        base_price: basePrice,
+        discounted_price: discountedPrice,
+        selling_price: sellingPrice,
         total_price: totalPrice,
-        purchase_price: item.purchase_price,
+        purchase_price: purchasePrice,
         weight: item.weight,
         unit: item.unit,
       };
     });
 
-    order.grand_total = calculatedTotal + deliveryCharge + platformFee;
-
-    // Other fields
-    order.total_purchase_price = order.items.reduce(
-      (sum, item) => sum + (item.purchase_price ?? 0),
-      0
-    );
-
     order.isPriceEdited = order.products.some((item) => {
-      const expected = Math.round(item.total_price);
-      const actual = Math.round(item.total_price); // Same here since recalculated
-      return expected !== actual;
+      const expected = item.weight !== item.product.weight;
+      return expected;
     });
 
-    order.calculated_total_price = calculatedTotal;
-
-    // Cleanup
     delete order.items;
 
     res.json(order);

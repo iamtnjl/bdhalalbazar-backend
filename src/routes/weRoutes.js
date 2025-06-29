@@ -20,6 +20,7 @@ const { getAllColors, createColor } = require("../controllers/colorController");
 const {
   getAllProducts,
   getProductDetails,
+  getAdminProductDetails,
   createProduct,
   updateProduct,
   updateProductVisibility,
@@ -29,6 +30,7 @@ const {
 const {
   getAllCategories,
   createCategory,
+  createSubCategory,
 } = require("../controllers/categoryController");
 const {
   getAllMaterials,
@@ -39,6 +41,14 @@ const {
   getSettings,
   updateSettings,
 } = require("../controllers/settingsController");
+const {
+  createTag,
+  getAllTags,
+  getAllTagOptions,
+  getTagDetails,
+  updateTag,
+  deleteTag,
+} = require("../controllers/tagController");
 
 // Dashboard API
 router.get("/dashboard", getDashboardStats);
@@ -58,6 +68,15 @@ router.post("/materials", createMaterial);
 //Category API
 router.get("/categories", getAllCategories);
 router.post("/categories", createCategory);
+router.post("/sub-categories", createSubCategory);
+
+//Tags API
+router.post("/tag", createTag);
+router.get("/tags", getAllTags);
+router.get("/tags-option", getAllTagOptions);
+router.get("/tag/:id", getTagDetails);
+router.patch("/tag/:id", updateTag);
+router.delete("/tag/:id", deleteTag);
 
 //Color API
 router.get("/colors", getAllColors);
@@ -75,7 +94,7 @@ router.put("/orders/:orderId/edit", editOrderItem);
 
 //Products API
 router.get("/products", getAllProducts);
-router.get("/products/:productId", getProductDetails);
+router.get("/products/:productId", getAdminProductDetails);
 router.post(
   "/products",
   upload.fields([

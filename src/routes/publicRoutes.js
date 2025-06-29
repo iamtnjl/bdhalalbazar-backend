@@ -3,7 +3,10 @@ const router = express.Router();
 
 const { getAllBrands } = require("../controllers/brandController");
 const { getAllMaterials } = require("../controllers/materialController");
-const { getAllCategories } = require("../controllers/categoryController");
+const {
+  getAllCategories,
+  getAllSubCategories,
+} = require("../controllers/categoryController");
 const { getAllColors } = require("../controllers/colorController");
 const {
   publicGetAllProducts,
@@ -21,6 +24,7 @@ const { placeOrder } = require("../controllers/orderController");
 router.get("/brands", getAllBrands);
 router.get("/materials", getAllMaterials);
 router.get("/categories", getAllCategories);
+router.get("/sub-categories", getAllSubCategories);
 router.get("/colors", getAllColors);
 
 //Products API

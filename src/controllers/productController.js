@@ -1,12 +1,13 @@
 const Product = require("../models/productModel");
 const Brand = require("../models/brandModel");
+const Tag = require("../models/tagsModel");
+const SubCategory = require("../models/SubCategoryModel");
 const Material = require("../models/materialModel");
 const Category = require("../models/categoryModel");
-const Settings = require("../models/settingsModel");
 const Color = require("../models/colorModel");
 const paginate = require("../utils/pagination");
 const cloudinary = require("../config/cloudinary");
-const { applyProfitMargin, applyDiscount } = require("../utils/price");
+const { applyDiscount } = require("../utils/price");
 
 const toSlugArray = (value) => {
   if (!value) return [];
@@ -19,21 +20,28 @@ const toSlugArray = (value) => {
 
 const createProduct = async (req, res) => {
   try {
-    const {
+    let {
       name,
+      description,
       price,
       discount,
       brand,
       materials,
       categories,
+      subCategory,
+      tags,
       colors,
       weight,
       unit,
-      description,
       manufacturer,
+      searchTerms,
+      mrp_price,
     } = req.body;
 
-    // Fetch brand, category, material, and color IDs from slugs
+    if (typeof name === "string") name = JSON.parse(name);
+    if (typeof description === "string") description = JSON.parse(description);
+
+    // Fetch referenced IDs
     const brandDocs = await Brand.find({ slug: { $in: brand } }).select("_id");
     const categoryDocs = await Category.find({
       slug: { $in: categories },
@@ -43,7 +51,24 @@ const createProduct = async (req, res) => {
     }).select("_id");
     const colorDocs = await Color.find({ slug: { $in: colors } }).select("_id");
 
-    // Initialize the image objects
+    // Fetch subCategory (optional)
+    let subCategoryDoc = null;
+    if (subCategory) {
+      subCategoryDoc = await SubCategory.findOne({ slug: subCategory });
+      if (!subCategoryDoc) {
+        return res.status(400).json({ message: "Invalid subCategory" });
+      }
+
+      // Ensure subCategory matches one of the selected categories
+      if (
+        !categoryDocs.find((cat) => cat._id.equals(subCategoryDoc.category))
+      ) {
+        return res.status(400).json({
+          message: "Subcategory does not belong to selected category",
+        });
+      }
+    }
+    // Handle images
     let primaryImage = {};
     let multipleImages = [];
 
@@ -109,26 +134,38 @@ const createProduct = async (req, res) => {
       }
     }
 
-    // Create the product
     const product = new Product({
-      name,
+      name: {
+        en: name.en,
+        bn: name.bn,
+      },
+      description: {
+        en: description.en,
+        bn: description.bn,
+      },
+      searchTerms: searchTerms
+        ? searchTerms.split(",").map((s) => s.trim())
+        : [],
       price,
+      mrp_price,
       discount,
       brand: brandDocs.map((b) => b._id),
       materials: materialDocs.map((m) => m._id),
       categories: categoryDocs.map((c) => c._id),
+      subCategory: subCategoryDoc?._id || null,
+      tags,
       colors: colorDocs.map((c) => c._id),
       primary_image: primaryImage,
       images: multipleImages,
       weight,
       unit,
-      description,
       manufacturer,
     });
 
     await product.save();
     res.status(201).json(product);
   } catch (error) {
+    console.error(error);
     res.status(400).json({ error: error.message });
   }
 };
@@ -138,7 +175,11 @@ const publicGetAllProducts = async (req, res) => {
     let query = { is_published: true };
 
     if (req.query.search) {
-      query.name = { $regex: req.query.search, $options: "i" };
+      const searchRegex = new RegExp(req.query.search, "i");
+      query.$or = [
+        { name: { $regex: searchRegex } },
+        { searchTerm: { $in: [req.query.search] } },
+      ];
     }
 
     if (req.query.minPrice || req.query.maxPrice) {
@@ -166,6 +207,7 @@ const publicGetAllProducts = async (req, res) => {
     await applySlugFilter("categories", Category);
     await applySlugFilter("materials", Material);
     await applySlugFilter("colors", Color);
+    await applySlugFilter("subCategory", SubCategory);
 
     let sort = {};
     if (req.query.sort_by) {
@@ -188,49 +230,46 @@ const publicGetAllProducts = async (req, res) => {
       }
     }
 
-    const settings = await Settings.findOne();
-    const profitMargin = settings?.profit_margin || 0;
-
-    const profitCategoryNames = [
-      "vegetable",
-      "meat",
-      "beef",
-      "mutton",
-      "chicken",
-      "fish",
-    ];
-    const profitCategories = await Category.find({
-      slug: { $in: profitCategoryNames },
-    });
-    const profitCategoryIds = profitCategories.map((c) => c._id.toString());
-
     const paginatedData = await paginate(
       Product,
       query,
       req,
-      ["brand", "materials", "categories", "colors"],
+      ["brand", "materials", "categories", "colors", "tags"],
       sort
     );
 
-    const hasProfitCategory = (productCategories) => {
-      return productCategories.some((cat) =>
-        profitCategoryIds.includes(cat._id.toString())
-      );
-    };
-
     paginatedData.results = paginatedData.results.map((product) => {
-      const useProfitMargin = hasProfitCategory(product.categories);
-      const adjustedPrice = useProfitMargin
-        ? applyProfitMargin(product.price, profitMargin)
-        : product.price;
-      const discountedPrice = applyDiscount(adjustedPrice, product.discount);
+      const basePrice = product.price;
+
+      const hasMRPTag = product.tags?.some(
+        (tag) => tag.name?.toLowerCase() === "mrp"
+      );
+
+      let sellingPrice;
+      if (hasMRPTag && product.mrp_price) {
+        sellingPrice = product.mrp_price;
+      } else {
+        const tagMargins =
+          product.tags?.length > 0
+            ? product.tags.map((t) => t.margin || 0)
+            : [0];
+        const maxMargin = Math.max(...tagMargins);
+        sellingPrice = basePrice + (basePrice * maxMargin) / 100;
+      }
+
+      const discountPercent = product.discount || 0;
+      const discountedPrice =
+        sellingPrice - (sellingPrice * discountPercent) / 100;
+
+      const formatNumber = (num) =>
+        num % 1 === 0 ? parseInt(num) : parseFloat(num.toFixed(2));
 
       return {
         _id: product._id,
         name: product.name,
-        price: adjustedPrice,
-        discount: product.discount,
-        discounted_price: discountedPrice,
+        price: formatNumber(sellingPrice), // 👉 `price` is the selling price now
+        discount: discountPercent,
+        discounted_price: formatNumber(discountedPrice), // 👉 based on selling price
         brand: product.brand.map((b) => ({ name: b.name, slug: b.slug })),
         materials: product.materials.map((m) => ({
           name: m.name,
@@ -256,9 +295,11 @@ const publicGetAllProducts = async (req, res) => {
 
     res.status(200).json(paginatedData);
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: error.message });
   }
 };
+
 const getAllProducts = async (req, res) => {
   try {
     let query = {};
@@ -275,16 +316,16 @@ const getAllProducts = async (req, res) => {
       if (req.query.maxPrice) query.price.$lte = parseFloat(req.query.maxPrice);
     }
 
-    // Function to convert a comma-separated string into an array
+    // Helper to convert comma-separated values to array
     const convertToArray = (value) => value.split(",");
 
-    // Function to fetch ObjectIds from slugs
+    // Helper to fetch ObjectIds by slug
     const fetchObjectIds = async (Model, slugs) => {
       const items = await Model.find({ slug: { $in: slugs } }, "_id");
       return items.map((item) => item._id);
     };
 
-    // Unified filtering for brand, categories, materials, and colors (using slugs)
+    // Apply unified filters by slug
     const applySlugFilter = async (field, model) => {
       if (req.query[field]) {
         const slugs = convertToArray(req.query[field]);
@@ -293,13 +334,14 @@ const getAllProducts = async (req, res) => {
       }
     };
 
-    // Apply filters for brand, categories, materials, and colors
     await applySlugFilter("brand", Brand);
     await applySlugFilter("categories", Category);
     await applySlugFilter("materials", Material);
     await applySlugFilter("colors", Color);
+    await applySlugFilter("tags", Tag);
+    await applySlugFilter("subCategory", SubCategory);
 
-    // Sorting logic
+    // Sorting
     let sort = {};
     if (req.query.sort_by) {
       switch (req.query.sort_by) {
@@ -321,52 +363,94 @@ const getAllProducts = async (req, res) => {
       }
     }
 
-    // Get paginated results with populated fields
+    // Paginate with populate
     const paginatedData = await paginate(
       Product,
       query,
       req,
-      ["brand", "materials", "categories", "colors"],
+      ["brand", "materials", "categories", "colors", "tags", "subCategory"],
       sort
     );
 
-    // Discount calculation
-    const calculateDiscount = (product) => {
+    // Transform each product
+    const transformProduct = (product) => {
+      const basePrice = product.price;
+
+      // Check for MRP tag
+      const hasMRPTag = product.tags?.some(
+        (tag) => tag.name.toLowerCase() === "mrp"
+      );
+
+      let sellingPrice;
+
+      if (hasMRPTag && product.mrp_price) {
+        sellingPrice = product.mrp_price;
+      } else {
+        const tagMargins =
+          product.tags?.length > 0
+            ? product.tags.map((t) => t.margin || 0)
+            : [0];
+        const maxMargin = Math.max(...tagMargins);
+        sellingPrice = basePrice + (basePrice * maxMargin) / 100;
+      }
+
+      const discountPercent = product.discount || 0;
       const discountedPrice =
-        product.price - (product.price * product.discount) / 100;
-      return discountedPrice % 1 === 0
-        ? parseInt(discountedPrice)
-        : parseFloat(discountedPrice.toFixed(2));
+        sellingPrice - (sellingPrice * discountPercent) / 100;
+
+      const formatNumber = (num) =>
+        num % 1 === 0 ? parseInt(num) : parseFloat(num.toFixed(2));
+
+      return {
+        _id: product._id,
+        name: product.name,
+        price: basePrice,
+        mrp_price: product.mrp_price || null,
+        selling_price: formatNumber(sellingPrice),
+        discount: discountPercent,
+        discounted_price: formatNumber(discountedPrice),
+        brand: product.brand.map((b) => ({ name: b.name, slug: b.slug })),
+        materials: product.materials.map((m) => ({
+          name: m.name,
+          slug: m.slug,
+        })),
+        categories: product.categories.map((c) => ({
+          name: c.name,
+          slug: c.slug,
+        })),
+        sub_category: product?.subCategory
+          ? {
+              name: product.subCategory.name,
+              slug: product.subCategory.slug,
+            }
+          : null,
+        tags:
+          product?.tags?.length > 0
+            ? product.tags.map((t) => ({
+                name: t.name,
+                _id: t._id,
+                margin: t.margin,
+              }))
+            : [],
+        colors: product.colors.map((c) => ({ name: c.name, slug: c.slug })),
+        primary_image: product.primary_image,
+        weight: product.weight,
+        unit: product.unit,
+        images: product.images,
+        status: product.status,
+        is_published: product.is_published,
+        createdAt: product.createdAt,
+        updatedAt: product.updatedAt,
+        stock: product.stock,
+        orderable_stock: product.orderable_stock,
+      };
     };
 
-    // Transform the results
-    paginatedData.results = paginatedData.results.map((product) => ({
-      _id: product._id,
-      name: product.name,
-      price: product.price,
-      discount: product.discount,
-      discounted_price: calculateDiscount(product),
-      brand: product.brand.map((b) => ({ name: b.name, slug: b.slug })),
-      materials: product.materials.map((m) => ({ name: m.name, slug: m.slug })),
-      categories: product.categories.map((c) => ({
-        name: c.name,
-        slug: c.slug,
-      })),
-      colors: product.colors.map((c) => ({ name: c.name, slug: c.slug })),
-      primary_image: product.primary_image,
-      weight: product.weight,
-      unit: product.unit,
-      images: product.images,
-      status: product.status,
-      is_published: product.is_published,
-      createdAt: product.createdAt,
-      updatedAt: product.updatedAt,
-      stock: product.stock,
-      orderable_stock: product.orderable_stock,
-    }));
+    paginatedData.results = paginatedData.results.map(transformProduct);
 
     res.status(200).json(paginatedData);
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -375,55 +459,41 @@ const getProductDetails = async (req, res) => {
   try {
     const { productId } = req.params;
 
-    // Fetch product with populated references
     const product = await Product.findById(productId)
       .populate("brand", "name slug")
       .populate("materials", "name slug")
       .populate("categories", "name slug")
-      .populate("colors", "name slug");
+      .populate("colors", "name slug")
+      .populate("tags", "name margin"); // Include tags!
 
     if (!product) {
       return res.status(404).json({ error: "Product not found" });
     }
 
-    // Fetch profit margin from settings
-    const settings = await Settings.findOne();
-    const profitMargin = settings?.profit_margin || 0;
+    const basePrice = product.price;
 
-    // Categories that require profit margin application
-    const profitCategorySlugs = [
-      "vegetable",
-      "meat",
-      "beef",
-      "mutton",
-      "chicken",
-      "fish",
-    ];
-    const profitCategories = await Category.find({
-      slug: { $in: profitCategorySlugs },
-    });
-    const profitCategoryIds = profitCategories.map((cat) => cat._id.toString());
-
-    // Check if product belongs to any profit margin category
-    const isProfitApplied = product.categories.some((cat) =>
-      profitCategoryIds.includes(cat._id.toString())
+    // Check for MRP tag
+    const hasMRPTag = product.tags?.some(
+      (tag) => tag.name?.toLowerCase() === "mrp"
     );
 
-    // Calculate adjusted price with profit margin if applicable
-    const basePrice = product.price;
-    const priceWithProfit = isProfitApplied
-      ? applyProfitMargin(basePrice, profitMargin)
-      : basePrice;
+    let sellingPrice;
+    if (hasMRPTag && product.mrp_price) {
+      sellingPrice = product.mrp_price;
+    } else {
+      const tagMargins =
+        product.tags?.length > 0 ? product.tags.map((t) => t.margin || 0) : [0];
+      const maxMargin = Math.max(...tagMargins);
+      sellingPrice = basePrice + (basePrice * maxMargin) / 100;
+    }
 
-    // Calculate discount and discounted price
     const discountPercent = product.discount || 0;
-    const discountedPrice = applyDiscount(priceWithProfit, discountPercent);
+    const discountedPrice =
+      sellingPrice - (sellingPrice * discountPercent) / 100;
 
-    // Format price, discount, and discounted price for consistent decimal places
     const formatNumber = (num) =>
       num % 1 === 0 ? parseInt(num) : parseFloat(num.toFixed(2));
 
-    // Format images ensuring primary image first
     let images = product.images || [];
     if (product.primary_image) {
       images = [
@@ -434,11 +504,10 @@ const getProductDetails = async (req, res) => {
       ];
     }
 
-    // Send formatted response
     res.status(200).json({
       _id: product._id,
       name: product.name,
-      price: formatNumber(priceWithProfit),
+      price: formatNumber(sellingPrice), // Final selling price
       discount: formatNumber(discountPercent),
       discounted_price: formatNumber(discountedPrice),
       stock_id: product.stock_id,
@@ -464,12 +533,84 @@ const getProductDetails = async (req, res) => {
   }
 };
 
-module.exports = getProductDetails;
+const getAdminProductDetails = async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    // Fetch product with populated references
+    const product = await Product.findById(productId)
+      .populate("brand", "name slug")
+      .populate("materials", "name slug")
+      .populate("categories", "name slug")
+      .populate("colors", "name slug")
+      .populate("tags", "name slug") // ✅ add tags
+      .populate("subCategory", "name slug"); // ✅ add subCategory
+
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    // Calculate adjusted price with profit margin if applicable
+    const basePrice = product.price;
+    const priceWithProfit = basePrice;
+
+    // Calculate discount and discounted price
+    const discountPercent = product.discount || 0;
+    const discountedPrice = applyDiscount(priceWithProfit, discountPercent);
+
+    // Format price, discount, and discounted price for consistent decimal places
+    const formatNumber = (num) =>
+      num % 1 === 0 ? parseInt(num) : parseFloat(num.toFixed(2));
+
+    // Format images ensuring primary image first
+    let images = product.images || [];
+    if (product.primary_image) {
+      images = [
+        product.primary_image,
+        ...images.filter(
+          (img) => img.original !== product.primary_image.original
+        ),
+      ];
+    }
+
+    // Send formatted response with new fields
+    res.status(200).json({
+      _id: product._id,
+      name: product.name,
+      price: formatNumber(priceWithProfit),
+      mrp_price: formatNumber(product.mrp_price),
+      discount: formatNumber(discountPercent),
+      discounted_price: formatNumber(discountedPrice),
+      stock_id: product.stock_id,
+      brand: product.brand,
+      materials: product.materials,
+      categories: product.categories,
+      subCategory: product.subCategory, // ✅ added
+      colors: product.colors,
+      tags: product.tags, // ✅ added
+      searchTerms: product.searchTerms || [], // ✅ added
+      images,
+      status: product.status,
+      is_published: product.is_published,
+      stock: product.stock,
+      orderable_stock: product.orderable_stock,
+      ad_pixel_id: product.ad_pixel_id,
+      createdAt: product.createdAt,
+      updatedAt: product.updatedAt,
+      weight: product.weight,
+      unit: product.unit,
+      description: product.description,
+    });
+  } catch (error) {
+    console.error("getProductDetails error:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
 
 const updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    const {
+    let {
       name,
       price,
       discount,
@@ -483,13 +624,20 @@ const updateProduct = async (req, res) => {
       manufacturer,
       is_published,
       status,
+      subCategory,
+      tags,
+      searchTerms,
+      mrp_price,
     } = req.body;
+    if (typeof name === "string") name = JSON.parse(name);
+    if (typeof description === "string") description = JSON.parse(description);
 
     const updateData = {};
 
     // Basic fields
     if (name) updateData.name = name;
     if (price) updateData.price = price;
+    if (mrp_price) updateData.mrp_price = mrp_price;
     if (discount) updateData.discount = discount;
     if (weight) updateData.weight = weight;
     if (unit) updateData.unit = unit;
@@ -498,29 +646,60 @@ const updateProduct = async (req, res) => {
     if (is_published !== undefined) updateData.is_published = is_published;
     if (status) updateData.status = status;
 
-    // Fetch referenced IDs using slugs
+    // Search Terms: if provided, split and trim
+    if (searchTerms) {
+      if (typeof searchTerms === "string") {
+        updateData.searchTerms = searchTerms.split(",").map((s) => s.trim());
+      } else if (Array.isArray(searchTerms)) {
+        updateData.searchTerms = searchTerms;
+      }
+    }
 
-    const brandSlugs = toSlugArray(brand);
-    const brandDocs = await Brand.find({ slug: { $in: brandSlugs } });
-    updateData.brand = brandDocs.map((b) => b._id);
+    // Tags: assume they come as array of IDs or strings
+    if (tags) {
+      updateData.tags = Array.isArray(tags)
+        ? tags
+        : tags.split(",").map((t) => t.trim());
+    }
 
-    const categoryDocs = await Category.find({ slug: { $in: categories } });
-    updateData.categories = categoryDocs.map((c) => c._id);
+    // Subcategory: fetch and validate
+    if (subCategory) {
+      const subCategoryDoc = await SubCategory.findOne({ slug: subCategory });
+      if (!subCategoryDoc) {
+        return res.status(400).json({ message: "Invalid subCategory" });
+      }
+      updateData.subCategory = subCategoryDoc._id;
+    }
 
-    const materialSlugs = toSlugArray(materials);
-    const materialDocs = await Material.find({
-      slug: { $in: materialSlugs },
-    });
-    updateData.materials = materialDocs.map((m) => m._id);
+    // Fetch referenced IDs
+    if (brand) {
+      const brandSlugs = toSlugArray(brand);
+      const brandDocs = await Brand.find({ slug: { $in: brandSlugs } });
+      updateData.brand = brandDocs.map((b) => b._id);
+    }
 
-    const colorSlugs = toSlugArray(colors);
-    const colorDocs = await Color.find({ slug: { $in: colorSlugs } });
-    updateData.colors = colorDocs.map((c) => c._id);
+    if (categories) {
+      const categoryDocs = await Category.find({ slug: { $in: categories } });
+      updateData.categories = categoryDocs.map((c) => c._id);
+    }
+
+    if (materials) {
+      const materialSlugs = toSlugArray(materials);
+      const materialDocs = await Material.find({
+        slug: { $in: materialSlugs },
+      });
+      updateData.materials = materialDocs.map((m) => m._id);
+    }
+
+    if (colors) {
+      const colorSlugs = toSlugArray(colors);
+      const colorDocs = await Color.find({ slug: { $in: colorSlugs } });
+      updateData.colors = colorDocs.map((c) => c._id);
+    }
 
     // Handle primary image
     if (req.files?.primary_image) {
       const file = req.files.primary_image[0];
-
       const [original, thumbnail, medium] = await Promise.all([
         cloudinary.uploader.upload(file.path, { folder: "product_images" }),
         cloudinary.uploader.upload(file.path, {
@@ -532,7 +711,6 @@ const updateProduct = async (req, res) => {
           transformation: [{ width: 600, height: 600, crop: "limit" }],
         }),
       ]);
-
       updateData.primary_image = {
         original: original.secure_url,
         thumbnail: thumbnail.secure_url,
@@ -555,7 +733,6 @@ const updateProduct = async (req, res) => {
               transformation: [{ width: 600, height: 600, crop: "limit" }],
             }),
           ]);
-
           return {
             original: original.secure_url,
             thumbnail: thumbnail.secure_url,
@@ -563,11 +740,10 @@ const updateProduct = async (req, res) => {
           };
         })
       );
-
       updateData.images = multipleImages;
     }
 
-    // Perform the update
+    // Final update
     const updatedProduct = await Product.findByIdAndUpdate(id, updateData, {
       new: true,
       runValidators: true,
@@ -638,6 +814,7 @@ module.exports = {
   publicGetAllProducts,
   getAllProducts,
   getProductDetails,
+  getAdminProductDetails,
   updateProduct,
   updateProductVisibility,
   deleteProductById,
