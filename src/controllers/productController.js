@@ -173,13 +173,8 @@ const createProduct = async (req, res) => {
 
 const publicGetAllProducts = async (req, res) => {
   try {
-    let query = { is_published: true };
-
-    if (req.query.minPrice || req.query.maxPrice) {
-      query.price = {};
-      if (req.query.minPrice) query.price.$gte = parseFloat(req.query.minPrice);
-      if (req.query.maxPrice) query.price.$lte = parseFloat(req.query.maxPrice);
-    }
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
 
     const convertToArray = (value) => value.split(",");
 
@@ -188,86 +183,163 @@ const publicGetAllProducts = async (req, res) => {
       return items.map((item) => item._id);
     };
 
-    const applySlugFilter = async (field, model) => {
-      if (req.query[field]) {
-        const slugs = convertToArray(req.query[field]);
-        const ids = await fetchObjectIds(model, slugs);
-        query[field] = { $in: ids };
-      }
+    const matchStage = {
+      is_published: true,
     };
 
-    await applySlugFilter("brand", Brand);
-    await applySlugFilter("categories", Category);
-    await applySlugFilter("materials", Material);
-    await applySlugFilter("colors", Color);
-    await applySlugFilter("subCategory", SubCategory);
+    // Price filter
+    if (req.query.minPrice || req.query.maxPrice) {
+      matchStage.price = {};
+      if (req.query.minPrice)
+        matchStage.price.$gte = parseFloat(req.query.minPrice);
+      if (req.query.maxPrice)
+        matchStage.price.$lte = parseFloat(req.query.maxPrice);
+    }
 
-    let sort = {};
+    // Slug filters
+    if (req.query.brand) {
+      const slugs = convertToArray(req.query.brand);
+      matchStage.brand = { $in: await fetchObjectIds(Brand, slugs) };
+    }
+    if (req.query.categories) {
+      const slugs = convertToArray(req.query.categories);
+      matchStage.categories = { $in: await fetchObjectIds(Category, slugs) };
+    }
+    if (req.query.materials) {
+      const slugs = convertToArray(req.query.materials);
+      matchStage.materials = { $in: await fetchObjectIds(Material, slugs) };
+    }
+    if (req.query.colors) {
+      const slugs = convertToArray(req.query.colors);
+      matchStage.colors = { $in: await fetchObjectIds(Color, slugs) };
+    }
+    if (req.query.subCategory) {
+      const slugs = convertToArray(req.query.subCategory);
+      matchStage.subCategory = {
+        $in: await fetchObjectIds(SubCategory, slugs),
+      };
+    }
+
+    // Sorting
+    let sortStage = { createdAt: -1 };
     if (req.query.sort_by) {
       switch (req.query.sort_by) {
         case "price_asc":
-          sort = { price: 1 };
+          sortStage = { price: 1 };
           break;
         case "price_desc":
-          sort = { price: -1 };
+          sortStage = { price: -1 };
           break;
         case "newest":
-          sort = { createdAt: -1 };
+          sortStage = { createdAt: -1 };
           break;
         case "oldest":
-          sort = { createdAt: 1 };
+          sortStage = { createdAt: 1 };
           break;
         default:
-          sort = { createdAt: -1 };
+          sortStage = { createdAt: -1 };
           break;
       }
     }
 
-    let products = await Product.find(query)
-      .populate(["brand", "materials", "categories", "colors", "tags"])
-      .sort(sort);
+    const pipeline = [];
 
-    // === Apply Fuse.js search if search is provided ===
+    // Atlas Search fuzzy `$search` stage if search exists
     if (req.query.search) {
-      const fuse = new Fuse(products, {
-        keys: [
-          { name: "name.en", weight: 0.5 },
-          { name: "name.bn", weight: 0.5 },
-          { name: "searchTerms", weight: 0.5 },
-        ],
-        threshold: 0.4,
+      pipeline.push({
+        $search: {
+          index: "default",
+          text: {
+            query: req.query.search,
+            path: ["name.en", "name.bn", "searchTerms"],
+            fuzzy: {
+              maxEdits: 2,
+            },
+          },
+        },
       });
-
-      const fuseResults = fuse.search(req.query.search);
-      products = fuseResults.map((r) => r.item);
     }
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const totalCount = products.length;
 
-    const start = (page - 1) * limit;
-    const end = start + limit;
+    // 🟢 Match stage
+    pipeline.push({ $match: matchStage });
 
-    const paginatedResults = products.slice(start, end);
+    // 🟢 Sort stage
+    pipeline.push({ $sort: sortStage });
 
-    const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
-      req.path
-    }`;
+    // 🟢 Facet for count + paginated data
+    pipeline.push({
+      $facet: {
+        metadata: [{ $count: "total" }],
+        data: [
+          { $skip: (page - 1) * limit },
+          { $limit: limit },
+          {
+            $lookup: {
+              from: "brands",
+              localField: "brand",
+              foreignField: "_id",
+              as: "brand",
+            },
+          },
+          {
+            $lookup: {
+              from: "categories",
+              localField: "categories",
+              foreignField: "_id",
+              as: "categories",
+            },
+          },
+          {
+            $lookup: {
+              from: "materials",
+              localField: "materials",
+              foreignField: "_id",
+              as: "materials",
+            },
+          },
+          {
+            $lookup: {
+              from: "colors",
+              localField: "colors",
+              foreignField: "_id",
+              as: "colors",
+            },
+          },
+          {
+            $lookup: {
+              from: "tags",
+              localField: "tags",
+              foreignField: "_id",
+              as: "tags",
+            },
+          },
+          {
+            $lookup: {
+              from: "subcategories",
+              localField: "subCategory",
+              foreignField: "_id",
+              as: "subCategory",
+            },
+          },
+          {
+            $unwind: {
+              path: "$subCategory",
+              preserveNullAndEmptyArrays: true,
+            },
+          },
+        ],
+      },
+    });
 
-    const queryParams = new URLSearchParams(req.query);
-    queryParams.set("show", limit);
-    queryParams.delete("page");
-
-    const nextPage =
-      page * limit < totalCount
-        ? `${baseUrl}?${queryParams.toString()}&page=${page + 1}`
-        : null;
-
-    const prevPage =
-      page > 1 ? `${baseUrl}?${queryParams.toString()}&page=${page - 1}` : null;
+    const result = await Product.aggregate(pipeline);
+    const totalCount = result[0].metadata[0]?.total || 0;
+    const products = result[0].data;
 
     // === Map your pricing logic ===
-    const results = paginatedResults.map((product) => {
+    const formatNumber = (num) =>
+      num % 1 === 0 ? parseInt(num) : parseFloat(num.toFixed(2));
+
+    const results = products.map((product) => {
       const basePrice = product.price;
 
       const hasMRPTag = product.tags?.some(
@@ -290,9 +362,6 @@ const publicGetAllProducts = async (req, res) => {
       const discountedPrice =
         sellingPrice - (sellingPrice * discountPercent) / 100;
 
-      const formatNumber = (num) =>
-        num % 1 === 0 ? parseInt(num) : parseFloat(num.toFixed(2));
-
       return {
         _id: product._id,
         name: product.name,
@@ -308,6 +377,14 @@ const publicGetAllProducts = async (req, res) => {
           name: c.name,
           slug: c.slug,
         })),
+        sub_category: product.subCategory
+          ? { name: product.subCategory.name, slug: product.subCategory.slug }
+          : null,
+        tags: product?.tags?.map((t) => ({
+          name: t.name,
+          _id: t._id,
+          margin: t.margin,
+        })),
         colors: product.colors.map((c) => ({ name: c.name, slug: c.slug })),
         primary_image: product.primary_image,
         weight: product.weight,
@@ -322,7 +399,21 @@ const publicGetAllProducts = async (req, res) => {
       };
     });
 
-    // ✅ Final response shape
+    const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
+      req.path
+    }`;
+    const queryParams = new URLSearchParams(req.query);
+    queryParams.set("show", limit);
+    queryParams.delete("page");
+
+    const nextPage =
+      page * limit < totalCount
+        ? `${baseUrl}?${queryParams.toString()}&page=${page + 1}`
+        : null;
+
+    const prevPage =
+      page > 1 ? `${baseUrl}?${queryParams.toString()}&page=${page - 1}` : null;
+
     res.status(200).json({
       count: totalCount,
       next: nextPage,
