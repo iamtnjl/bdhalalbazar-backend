@@ -177,8 +177,9 @@ const publicGetAllProducts = async (req, res) => {
     if (req.query.search) {
       const searchRegex = new RegExp(req.query.search, "i");
       query.$or = [
-        { name: { $regex: searchRegex } },
-        { searchTerm: { $in: [req.query.search] } },
+        { "name.en": { $regex: searchRegex } },
+        { "name.bn": { $regex: searchRegex } },
+        { searchTerms: { $in: [req.query.search.toLowerCase()] } },
       ];
     }
 
