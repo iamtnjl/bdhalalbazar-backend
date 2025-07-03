@@ -8,6 +8,7 @@ const Color = require("../models/colorModel");
 const paginate = require("../utils/pagination");
 const cloudinary = require("../config/cloudinary");
 const { applyDiscount } = require("../utils/price");
+const Fuse = require("fuse.js");
 
 const toSlugArray = (value) => {
   if (!value) return [];
@@ -174,14 +175,15 @@ const publicGetAllProducts = async (req, res) => {
   try {
     let query = { is_published: true };
 
-    if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, "i");
-      query.$or = [
-        { "name.en": { $regex: searchRegex } },
-        { "name.bn": { $regex: searchRegex } },
-        { searchTerms: { $in: [req.query.search.toLowerCase()] } },
-      ];
-    }
+    // ❌ REMOVE direct $regex from here
+    // if (req.query.search) {
+    //   const searchRegex = new RegExp(req.query.search, "i");
+    //   query.$or = [
+    //     { "name.en": { $regex: searchRegex } },
+    //     { "name.bn": { $regex: searchRegex } },
+    //     { searchTerms: { $in: [req.query.search.toLowerCase()] } },
+    //   ];
+    // }
 
     if (req.query.minPrice || req.query.maxPrice) {
       query.price = {};
@@ -231,15 +233,51 @@ const publicGetAllProducts = async (req, res) => {
       }
     }
 
-    const paginatedData = await paginate(
-      Product,
-      query,
-      req,
-      ["brand", "materials", "categories", "colors", "tags"],
-      sort
-    );
+    let products = await Product.find(query)
+      .populate(["brand", "materials", "categories", "colors", "tags"])
+      .sort(sort);
 
-    paginatedData.results = paginatedData.results.map((product) => {
+    // === Apply Fuse.js search if search is provided ===
+    if (req.query.search) {
+      const fuse = new Fuse(products, {
+        keys: [
+          { name: "name.en", weight: 0.5 },
+          { name: "name.bn", weight: 0.5 },
+          { name: "searchTerms", weight: 0.5 },
+        ],
+        threshold: 0.4,
+      });
+
+      const fuseResults = fuse.search(req.query.search);
+      products = fuseResults.map((r) => r.item);
+    }
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const totalCount = products.length;
+
+    const start = (page - 1) * limit;
+    const end = start + limit;
+
+    const paginatedResults = products.slice(start, end);
+
+    const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
+      req.path
+    }`;
+
+    const queryParams = new URLSearchParams(req.query);
+    queryParams.set("show", limit);
+    queryParams.delete("page");
+
+    const nextPage =
+      page * limit < totalCount
+        ? `${baseUrl}?${queryParams.toString()}&page=${page + 1}`
+        : null;
+
+    const prevPage =
+      page > 1 ? `${baseUrl}?${queryParams.toString()}&page=${page - 1}` : null;
+
+    // === Map your pricing logic ===
+    const results = paginatedResults.map((product) => {
       const basePrice = product.price;
 
       const hasMRPTag = product.tags?.some(
@@ -268,9 +306,9 @@ const publicGetAllProducts = async (req, res) => {
       return {
         _id: product._id,
         name: product.name,
-        price: formatNumber(sellingPrice), // 👉 `price` is the selling price now
+        price: formatNumber(sellingPrice),
         discount: discountPercent,
-        discounted_price: formatNumber(discountedPrice), // 👉 based on selling price
+        discounted_price: formatNumber(discountedPrice),
         brand: product.brand.map((b) => ({ name: b.name, slug: b.slug })),
         materials: product.materials.map((m) => ({
           name: m.name,
@@ -294,7 +332,13 @@ const publicGetAllProducts = async (req, res) => {
       };
     });
 
-    res.status(200).json(paginatedData);
+    // ✅ Final response shape
+    res.status(200).json({
+      count: totalCount,
+      next: nextPage,
+      previous: prevPage,
+      results,
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error.message });
