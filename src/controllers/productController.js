@@ -175,16 +175,6 @@ const publicGetAllProducts = async (req, res) => {
   try {
     let query = { is_published: true };
 
-    // ❌ REMOVE direct $regex from here
-    // if (req.query.search) {
-    //   const searchRegex = new RegExp(req.query.search, "i");
-    //   query.$or = [
-    //     { "name.en": { $regex: searchRegex } },
-    //     { "name.bn": { $regex: searchRegex } },
-    //     { searchTerms: { $in: [req.query.search.toLowerCase()] } },
-    //   ];
-    // }
-
     if (req.query.minPrice || req.query.maxPrice) {
       query.price = {};
       if (req.query.minPrice) query.price.$gte = parseFloat(req.query.minPrice);
@@ -349,14 +339,16 @@ const getAllProducts = async (req, res) => {
   try {
     let query = {};
 
-    if (req.query.search) {
-      const searchRegex = new RegExp(req.query.search, "i");
-      query.$or = [
-        { "name.en": { $regex: searchRegex } },
-        { "name.bn": { $regex: searchRegex } },
-        { searchTerms: { $in: [req.query.search.toLowerCase()] } },
-      ];
-    }
+    // ✅ Remove regex here — use Fuse instead
+    // if (req.query.search) {
+    //   const searchRegex = new RegExp(req.query.search, "i");
+    //   query.$or = [
+    //     { "name.en": { $regex: searchRegex } },
+    //     { "name.bn": { $regex: searchRegex } },
+    //     { searchTerms: { $in: [req.query.search.toLowerCase()] } },
+    //   ];
+    // }
+
     // Filtering by price range
     if (req.query.minPrice || req.query.maxPrice) {
       query.price = {};
@@ -364,16 +356,13 @@ const getAllProducts = async (req, res) => {
       if (req.query.maxPrice) query.price.$lte = parseFloat(req.query.maxPrice);
     }
 
-    // Helper to convert comma-separated values to array
     const convertToArray = (value) => value.split(",");
 
-    // Helper to fetch ObjectIds by slug
     const fetchObjectIds = async (Model, slugs) => {
       const items = await Model.find({ slug: { $in: slugs } }, "_id");
       return items.map((item) => item._id);
     };
 
-    // Apply unified filters by slug
     const applySlugFilter = async (field, model) => {
       if (req.query[field]) {
         const slugs = convertToArray(req.query[field]);
@@ -394,10 +383,10 @@ const getAllProducts = async (req, res) => {
     if (req.query.sort_by) {
       switch (req.query.sort_by) {
         case "price_asc":
-          sort = { price: -1 };
+          sort = { price: 1 };
           break;
         case "price_desc":
-          sort = { price: 1 };
+          sort = { price: -1 };
           break;
         case "newest":
           sort = { createdAt: -1 };
@@ -411,26 +400,68 @@ const getAllProducts = async (req, res) => {
       }
     }
 
-    // Paginate with populate
-    const paginatedData = await paginate(
-      Product,
-      query,
-      req,
-      ["brand", "materials", "categories", "colors", "tags", "subCategory"],
-      sort
-    );
+    // 👉 Get ALL matching products first (filters only)
+    let products = await Product.find(query)
+      .populate([
+        "brand",
+        "materials",
+        "categories",
+        "colors",
+        "tags",
+        "subCategory",
+      ])
+      .sort(sort);
 
-    // Transform each product
+    // 👉 If search exists, apply Fuse locally
+    if (req.query.search) {
+      const fuse = new Fuse(products, {
+        keys: [
+          { name: "name.en", weight: 0.5 },
+          { name: "name.bn", weight: 0.5 },
+          { name: "searchTerms", weight: 1 },
+        ],
+        threshold: 0.4,
+      });
+
+      const fuseResults = fuse.search(req.query.search);
+      products = fuseResults.map((r) => r.item);
+    }
+
+    // Manual pagination
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const totalCount = products.length;
+
+    const start = (page - 1) * limit;
+    const end = start + limit;
+
+    const paginatedResults = products.slice(start, end);
+
+    // Build next/prev URLs
+    const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
+      req.path
+    }`;
+    const queryParams = new URLSearchParams(req.query);
+    queryParams.set("show", limit);
+    queryParams.delete("page");
+
+    const nextPage =
+      page * limit < totalCount
+        ? `${baseUrl}?${queryParams.toString()}&page=${page + 1}`
+        : null;
+
+    const prevPage =
+      page > 1 ? `${baseUrl}?${queryParams.toString()}&page=${page - 1}` : null;
+
+    // Transform
     const transformProduct = (product) => {
       const basePrice = product.price;
 
-      // Check for MRP tag
       const hasMRPTag = product.tags?.some(
         (tag) => tag.name.toLowerCase() === "mrp"
       );
 
       let sellingPrice;
-
       if (hasMRPTag && product.mrp_price) {
         sellingPrice = product.mrp_price;
       } else {
@@ -494,9 +525,14 @@ const getAllProducts = async (req, res) => {
       };
     };
 
-    paginatedData.results = paginatedData.results.map(transformProduct);
+    const results = paginatedResults.map(transformProduct);
 
-    res.status(200).json(paginatedData);
+    res.status(200).json({
+      count: totalCount,
+      next: nextPage,
+      previous: prevPage,
+      results,
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error.message });
