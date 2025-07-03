@@ -339,16 +339,6 @@ const getAllProducts = async (req, res) => {
   try {
     let query = {};
 
-    // ✅ Remove regex here — use Fuse instead
-    // if (req.query.search) {
-    //   const searchRegex = new RegExp(req.query.search, "i");
-    //   query.$or = [
-    //     { "name.en": { $regex: searchRegex } },
-    //     { "name.bn": { $regex: searchRegex } },
-    //     { searchTerms: { $in: [req.query.search.toLowerCase()] } },
-    //   ];
-    // }
-
     // Filtering by price range
     if (req.query.minPrice || req.query.maxPrice) {
       query.price = {};
@@ -418,7 +408,7 @@ const getAllProducts = async (req, res) => {
         keys: [
           { name: "name.en", weight: 0.5 },
           { name: "name.bn", weight: 0.5 },
-          { name: "searchTerms", weight: 1 },
+          { name: "searchTerms", weight: 0.5 },
         ],
         threshold: 0.4,
       });
