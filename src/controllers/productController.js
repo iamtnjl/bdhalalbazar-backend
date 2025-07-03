@@ -305,11 +305,14 @@ const getAllProducts = async (req, res) => {
   try {
     let query = {};
 
-    // Search by name
     if (req.query.search) {
-      query.name = { $regex: req.query.search, $options: "i" };
+      const searchRegex = new RegExp(req.query.search, "i");
+      query.$or = [
+        { "name.en": { $regex: searchRegex } },
+        { "name.bn": { $regex: searchRegex } },
+        { searchTerms: { $in: [req.query.search.toLowerCase()] } },
+      ];
     }
-
     // Filtering by price range
     if (req.query.minPrice || req.query.maxPrice) {
       query.price = {};
