@@ -180,38 +180,6 @@ const publicGetAllProducts = async (req, res) => {
     // === Filters ===
     const must = [{ equals: { path: "is_published", value: true } }];
 
-    if (req.query.search) {
-      must.push({
-        text: {
-          query: req.query.search,
-          path: "searchTerms",
-        },
-      });
-    }
-
-    const should = [];
-    if (req.query.search) {
-      should.push(
-        {
-          text: {
-            query: req.query.search,
-            path: "name.en",
-            fuzzy: { maxEdits: 2 },
-            score: { boost: { value: 2 } },
-          },
-        },
-        {
-          text: {
-            query: req.query.search,
-            path: "name.bn",
-            fuzzy: { maxEdits: 2 },
-            score: { boost: { value: 2 } },
-          },
-        }
-      );
-    }
-
-    // Add price range filters to must if provided
     if (req.query.minPrice || req.query.maxPrice) {
       const range = {};
       if (req.query.minPrice) range.gte = parseFloat(req.query.minPrice);
@@ -247,16 +215,46 @@ const publicGetAllProducts = async (req, res) => {
       $search: {
         index: "default",
         compound: {
-          must,
-          should,
-          minimumShouldMatch: 0,
+          must: must,
         },
       },
     };
 
+    if (req.query.search) {
+      searchStage.$search.compound.should = [
+        {
+          text: {
+            query: req.query.search,
+            path: "name.en",
+            fuzzy: { maxEdits: 2 },
+            score: { boost: { value: 3 } },
+          },
+        },
+        {
+          text: {
+            query: req.query.search,
+            path: "name.bn",
+            fuzzy: { maxEdits: 2 },
+            score: { boost: { value: 3 } },
+          },
+        },
+        {
+          autocomplete: {
+            query: req.query.search,
+            path: "searchTerms",
+            tokenOrder: "sequential",
+            fuzzy: { maxEdits: 1 },
+            score: { boost: { value: 10 } },
+          },
+        },
+      ];
+      searchStage.$search.compound.minimumShouldMatch = 1;
+    }
+
     // === Sorting ===
     let sortStage = {};
     if (req.query.search) {
+      // When searching, sort by relevance score descending
       sortStage = { $sort: { score: { $meta: "textScore" } } };
     } else if (req.query.sort_by) {
       switch (req.query.sort_by) {
@@ -286,7 +284,8 @@ const publicGetAllProducts = async (req, res) => {
       sortStage,
       { $skip: skip },
       { $limit: limit },
-      // Your $lookup stages here (brands, materials, categories, subcategories, colors)...
+
+      // Populations
       {
         $lookup: {
           from: "brands",
@@ -340,18 +339,71 @@ const publicGetAllProducts = async (req, res) => {
 
     // === Transform ===
     results = results.map((product) => {
-      // your transform logic here ...
-      // same as your existing code
-      // ...
+      const basePrice = product.price;
+
+      const hasMRPTag = product.tags?.some(
+        (tag) => tag.name?.toLowerCase() === "mrp"
+      );
+
+      let sellingPrice;
+      if (hasMRPTag && product.mrp_price) {
+        sellingPrice = product.mrp_price;
+      } else {
+        const tagMargins =
+          product.tags?.length > 0
+            ? product.tags.map((t) => t.margin || 0)
+            : [0];
+        const maxMargin = Math.max(...tagMargins);
+        sellingPrice = basePrice + (basePrice * maxMargin) / 100;
+      }
+
+      const discountPercent = product.discount || 0;
+      const discountedPrice =
+        sellingPrice - (sellingPrice * discountPercent) / 100;
+
+      const formatNumber = (num) =>
+        num % 1 === 0 ? parseInt(num) : parseFloat(num.toFixed(2));
+
       return {
         _id: product._id,
         name: product.name,
-        price: product.price, // apply your price logic here if you want
-        // ...rest of your mapped fields
+        price: formatNumber(sellingPrice),
+        discount: discountPercent,
+        discounted_price: formatNumber(discountedPrice),
+        brand: product.brand.map((b) => ({ name: b.name, slug: b.slug })),
+        materials: product.materials.map((m) => ({
+          name: m.name,
+          slug: m.slug,
+        })),
+        categories: product.categories.map((c) => ({
+          name: c.name,
+          slug: c.slug,
+        })),
+        sub_category: product?.subCategory
+          ? {
+              name: product.subCategory.name,
+              slug: product.subCategory.slug,
+            }
+          : null,
+        colors: product.colors.map((c) => ({ name: c.name, slug: c.slug })),
+        tags: product.tags?.map((t) => ({
+          name: t.name,
+          margin: t.margin,
+        })),
+        primary_image: product.primary_image,
+        weight: product.weight,
+        unit: product.unit,
+        images: product.images,
+        status: product.status,
+        is_published: product.is_published,
+        createdAt: product.createdAt,
+        updatedAt: product.updatedAt,
+        stock: product.stock,
+        orderable_stock: product.orderable_stock,
       };
     });
 
-    // === Pagination links ===
+    // === Next/Prev ===
     const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
       req.path
     }`;
