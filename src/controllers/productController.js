@@ -239,10 +239,11 @@ const publicGetAllProducts = async (req, res) => {
           },
         },
         {
-          text: {
+          autocomplete: {
             query: req.query.search,
             path: "searchTerms",
-            score: { boost: { value: 6 } },
+            tokenOrder: "any",
+            score: { boost: { value: 15 } },
           },
         },
       ];
@@ -506,10 +507,11 @@ const getAllProducts = async (req, res) => {
           },
         },
         {
-          text: {
+          autocomplete: {
             query: req.query.search,
             path: "searchTerms",
-            score: { boost: { value: 6 } },
+            tokenOrder: "any",
+            score: { boost: { value: 15 } },
           },
         },
       ];
