@@ -177,6 +177,16 @@ const publicGetAllProducts = async (req, res) => {
     const limit = parseInt(req.query.show) || 20;
     const skip = (page - 1) * limit;
 
+    // === Filters ===
+    const must = [{ equals: { path: "is_published", value: true } }];
+
+    if (req.query.minPrice || req.query.maxPrice) {
+      const range = {};
+      if (req.query.minPrice) range.gte = parseFloat(req.query.minPrice);
+      if (req.query.maxPrice) range.lte = parseFloat(req.query.maxPrice);
+      must.push({ range: { path: "price", ...range } });
+    }
+
     const convertToArray = (value) => value.split(",");
 
     const fetchObjectIds = async (Model, slugs) => {
@@ -184,214 +194,193 @@ const publicGetAllProducts = async (req, res) => {
       return items.map((item) => item._id);
     };
 
-    // Build filter object for $match (normal MongoDB query)
-    const filters = { is_published: true };
-
-    if (req.query.minPrice || req.query.maxPrice) {
-      filters.price = {};
-      if (req.query.minPrice)
-        filters.price.$gte = parseFloat(req.query.minPrice);
-      if (req.query.maxPrice)
-        filters.price.$lte = parseFloat(req.query.maxPrice);
-    }
-
     if (req.query.brand) {
-      const brandIds = await fetchObjectIds(
-        Brand,
-        convertToArray(req.query.brand)
-      );
-      filters.brand = { $in: brandIds };
+      const ids = await fetchObjectIds(Brand, convertToArray(req.query.brand));
+      must.push({ in: { path: "brand", value: ids } });
     }
 
     if (req.query.categories) {
-      const categoryIds = await fetchObjectIds(
+      const ids = await fetchObjectIds(
         Category,
         convertToArray(req.query.categories)
       );
-      filters.categories = { $in: categoryIds };
+      must.push({ in: { path: "categories", value: ids } });
     }
 
     if (req.query.materials) {
-      const materialIds = await fetchObjectIds(
+      const ids = await fetchObjectIds(
         Material,
         convertToArray(req.query.materials)
       );
-      filters.materials = { $in: materialIds };
+      must.push({ in: { path: "materials", value: ids } });
     }
 
     if (req.query.colors) {
-      const colorIds = await fetchObjectIds(
-        Color,
-        convertToArray(req.query.colors)
-      );
-      filters.colors = { $in: colorIds };
+      const ids = await fetchObjectIds(Color, convertToArray(req.query.colors));
+      must.push({ in: { path: "colors", value: ids } });
     }
 
     if (req.query.subCategory) {
-      const subCategoryIds = await fetchObjectIds(
+      const ids = await fetchObjectIds(
         SubCategory,
         convertToArray(req.query.subCategory)
       );
-      filters.subCategory = { $in: subCategoryIds };
+      must.push({ in: { path: "subCategory", value: ids } });
     }
 
-    // Build Atlas Search stage ONLY if search query exists
-    let pipeline = [];
+    // === Atlas Search ===
+    const searchStage = {
+      $search: {
+        index: "default",
+        compound: {
+          must: must,
+        },
+      },
+    };
+
     if (req.query.search) {
-      pipeline.push({
-        $search: {
-          index: "default",
+      searchStage.$search.compound.should = [
+        {
           text: {
             query: req.query.search,
-            path: ["name.en", "name.bn", "searchTerms"],
+            path: "name.en",
             fuzzy: { maxEdits: 2 },
+            score: { boost: { value: 3 } },
           },
         },
-      });
+        {
+          text: {
+            query: req.query.search,
+            path: "name.bn",
+            fuzzy: { maxEdits: 2 },
+            score: { boost: { value: 3 } },
+          },
+        },
+        {
+          text: {
+            query: req.query.search,
+            path: "searchTerms",
+            fuzzy: { maxEdits: 1 },
+            score: { boost: { value: 2 } },
+          },
+        },
+      ];
+      searchStage.$search.compound.minimumShouldMatch = 1;
     }
 
-    // Add the normal MongoDB filters AFTER $search (or as first stage if no search)
-    pipeline.push({ $match: filters });
-
-    // Sorting stage
+    // === Sorting ===
+    let sortStage = {};
     if (req.query.search) {
-      // Sort by text score for search results
-      pipeline.push({ $sort: { score: { $meta: "textScore" } } });
-    } else {
-      // Sort by query param or default newest
-      let sort = { createdAt: -1 };
-      if (req.query.sort_by) {
-        switch (req.query.sort_by) {
-          case "price_asc":
-            sort = { price: 1 };
-            break;
-          case "price_desc":
-            sort = { price: -1 };
-            break;
-          case "newest":
-            sort = { createdAt: -1 };
-            break;
-          case "oldest":
-            sort = { createdAt: 1 };
-            break;
-        }
+      // When searching, sort by relevance score descending
+      sortStage = { $sort: { score: { $meta: "textScore" } } };
+    } else if (req.query.sort_by) {
+      switch (req.query.sort_by) {
+        case "price_asc":
+          sortStage = { $sort: { price: 1 } };
+          break;
+        case "price_desc":
+          sortStage = { $sort: { price: -1 } };
+          break;
+        case "newest":
+          sortStage = { $sort: { createdAt: -1 } };
+          break;
+        case "oldest":
+          sortStage = { $sort: { createdAt: 1 } };
+          break;
+        default:
+          sortStage = { $sort: { createdAt: -1 } };
+          break;
       }
-      pipeline.push({ $sort: sort });
+    } else {
+      sortStage = { $sort: { createdAt: -1 } };
     }
 
-    // Pagination + lookups + count in a single $facet stage
-    pipeline.push({
-      $facet: {
-        results: [
-          { $skip: skip },
-          { $limit: limit },
+    // === Pipeline ===
+    const pipeline = [
+      searchStage,
+      sortStage,
+      { $skip: skip },
+      { $limit: limit },
 
-          // Lookup brand (single ID)
-          {
-            $lookup: {
-              from: "brands",
-              let: { brandId: { $ifNull: ["$brand", null] } },
-              pipeline: [
-                { $match: { $expr: { $eq: ["$_id", "$$brandId"] } } },
-                { $project: { name: 1, slug: 1 } },
-              ],
-              as: "brand",
-            },
-          },
-
-          // Lookup materials (array)
-          {
-            $lookup: {
-              from: "materials",
-              let: { ids: { $ifNull: ["$materials", []] } },
-              pipeline: [
-                { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
-                { $project: { name: 1, slug: 1 } },
-              ],
-              as: "materials",
-            },
-          },
-
-          // Lookup categories (array)
-          {
-            $lookup: {
-              from: "categories",
-              let: { ids: { $ifNull: ["$categories", []] } },
-              pipeline: [
-                { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
-                { $project: { name: 1, slug: 1 } },
-              ],
-              as: "categories",
-            },
-          },
-
-          // Lookup subCategory (single)
-          {
-            $lookup: {
-              from: "subcategories",
-              let: { id: { $ifNull: ["$subCategory", null] } },
-              pipeline: [
-                { $match: { $expr: { $eq: ["$_id", "$$id"] } } },
-                { $project: { name: 1, slug: 1 } },
-              ],
-              as: "subCategory",
-            },
-          },
-          {
-            $unwind: { path: "$subCategory", preserveNullAndEmptyArrays: true },
-          },
-
-          // Lookup colors (array)
-          {
-            $lookup: {
-              from: "colors",
-              let: { ids: { $ifNull: ["$colors", []] } },
-              pipeline: [
-                { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
-                { $project: { name: 1, slug: 1 } },
-              ],
-              as: "colors",
-            },
-          },
-
-          // Lookup tags (array)
-          {
-            $lookup: {
-              from: "tags",
-              let: { ids: { $ifNull: ["$tags", []] } },
-              pipeline: [
-                { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
-                { $project: { name: 1, margin: 1 } },
-              ],
-              as: "tags",
-            },
-          },
-        ],
-        totalCount: [{ $count: "count" }],
+      // Populations
+      {
+        $lookup: {
+          from: "brands",
+          localField: "brand",
+          foreignField: "_id",
+          as: "brand",
+        },
       },
-    });
+      {
+        $lookup: {
+          from: "materials",
+          localField: "materials",
+          foreignField: "_id",
+          as: "materials",
+        },
+      },
+      {
+        $lookup: {
+          from: "categories",
+          localField: "categories",
+          foreignField: "_id",
+          as: "categories",
+        },
+      },
+      {
+        $lookup: {
+          from: "subcategories",
+          localField: "subCategory",
+          foreignField: "_id",
+          as: "subCategory",
+        },
+      },
+      { $unwind: { path: "$subCategory", preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: "colors",
+          localField: "colors",
+          foreignField: "_id",
+          as: "colors",
+        },
+      },
+      {
+        $lookup: {
+          from: "tags",
+          localField: "tags",
+          foreignField: "_id",
+          as: "tags",
+        },
+      },
+    ];
 
-    const data = await Product.aggregate(pipeline).allowDiskUse(true);
+    // === Count ===
+    const countPipeline = [searchStage, { $count: "count" }];
+    const countResult = await Product.aggregate(countPipeline);
+    const totalCount = countResult[0]?.count || 0;
 
-    const results = data[0].results;
-    const totalCount = data[0].totalCount[0]?.count || 0;
+    // === Run main ===
+    let results = await Product.aggregate(pipeline);
 
-    // Price calculations & formatting
-    const transformed = results.map((product) => {
+    // === Transform ===
+    results = results.map((product) => {
       const basePrice = product.price;
+
       const hasMRPTag = product.tags?.some(
         (tag) => tag.name?.toLowerCase() === "mrp"
       );
 
-      let maxMargin = 0;
-      if (product.tags?.length) {
-        maxMargin = Math.max(...product.tags.map((t) => t.margin || 0));
+      let sellingPrice;
+      if (hasMRPTag && product.mrp_price) {
+        sellingPrice = product.mrp_price;
+      } else {
+        const tagMargins =
+          product.tags?.length > 0
+            ? product.tags.map((t) => t.margin || 0)
+            : [0];
+        const maxMargin = Math.max(...tagMargins);
+        sellingPrice = basePrice + (basePrice * maxMargin) / 100;
       }
-
-      const sellingPrice =
-        hasMRPTag && product.mrp_price
-          ? product.mrp_price
-          : basePrice + (basePrice * maxMargin) / 100;
 
       const discountPercent = product.discount || 0;
       const discountedPrice =
@@ -406,12 +395,26 @@ const publicGetAllProducts = async (req, res) => {
         price: formatNumber(sellingPrice),
         discount: discountPercent,
         discounted_price: formatNumber(discountedPrice),
-        brand: product.brand,
-        materials: product.materials,
-        categories: product.categories,
-        sub_category: product.subCategory || null,
-        colors: product.colors,
-        tags: product.tags,
+        brand: product.brand.map((b) => ({ name: b.name, slug: b.slug })),
+        materials: product.materials.map((m) => ({
+          name: m.name,
+          slug: m.slug,
+        })),
+        categories: product.categories.map((c) => ({
+          name: c.name,
+          slug: c.slug,
+        })),
+        sub_category: product?.subCategory
+          ? {
+              name: product.subCategory.name,
+              slug: product.subCategory.slug,
+            }
+          : null,
+        colors: product.colors.map((c) => ({ name: c.name, slug: c.slug })),
+        tags: product.tags?.map((t) => ({
+          name: t.name,
+          margin: t.margin,
+        })),
         primary_image: product.primary_image,
         weight: product.weight,
         unit: product.unit,
@@ -425,7 +428,7 @@ const publicGetAllProducts = async (req, res) => {
       };
     });
 
-    // Build next/prev URLs
+    // === Next/Prev ===
     const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
       req.path
     }`;
@@ -445,7 +448,7 @@ const publicGetAllProducts = async (req, res) => {
       count: totalCount,
       next: nextPage,
       previous: prevPage,
-      results: transformed,
+      results,
     });
   } catch (error) {
     console.error(error);
