@@ -242,8 +242,9 @@ const publicGetAllProducts = async (req, res) => {
           autocomplete: {
             query: req.query.search,
             path: "searchTerms",
-            tokenOrder: "any",
-            score: { boost: { value: 15 } },
+            tokenOrder: "sequential",
+            fuzzy: { maxEdits: 1 },
+            score: { boost: { value: 10 } },
           },
         },
       ];
@@ -510,8 +511,9 @@ const getAllProducts = async (req, res) => {
           autocomplete: {
             query: req.query.search,
             path: "searchTerms",
-            tokenOrder: "any",
-            score: { boost: { value: 15 } },
+            tokenOrder: "sequential",
+            fuzzy: { maxEdits: 1 },
+            score: { boost: { value: 10 } },
           },
         },
       ];
