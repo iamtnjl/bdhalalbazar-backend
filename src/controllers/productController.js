@@ -177,17 +177,13 @@ const publicGetAllProducts = async (req, res) => {
     const limit = parseInt(req.query.show) || 20;
     const skip = (page - 1) * limit;
 
-    // === Build filters ===
+    // === Filters ===
     const must = [{ equals: { path: "is_published", value: true } }];
 
     if (req.query.minPrice || req.query.maxPrice) {
       const range = {};
-      if (req.query.minPrice) {
-        range.gte = parseFloat(req.query.minPrice);
-      }
-      if (req.query.maxPrice) {
-        range.lte = parseFloat(req.query.maxPrice);
-      }
+      if (req.query.minPrice) range.gte = parseFloat(req.query.minPrice);
+      if (req.query.maxPrice) range.lte = parseFloat(req.query.maxPrice);
       must.push({ range: { path: "price", ...range } });
     }
 
@@ -232,6 +228,7 @@ const publicGetAllProducts = async (req, res) => {
       must.push({ in: { path: "subCategory", value: ids } });
     }
 
+    // === Atlas Search ===
     const searchStage = {
       $search: {
         index: "default",
@@ -242,18 +239,41 @@ const publicGetAllProducts = async (req, res) => {
     };
 
     if (req.query.search) {
-      searchStage.$search.compound.must.push({
-        text: {
-          query: req.query.search,
-          path: ["name.en", "name.bn", "searchTerms"],
-          fuzzy: { maxEdits: 2 },
+      searchStage.$search.compound.should = [
+        {
+          text: {
+            query: req.query.search,
+            path: "name.en",
+            fuzzy: { maxEdits: 2 },
+            score: { boost: { value: 3 } },
+          },
         },
-      });
+        {
+          text: {
+            query: req.query.search,
+            path: "name.bn",
+            fuzzy: { maxEdits: 2 },
+            score: { boost: { value: 3 } },
+          },
+        },
+        {
+          text: {
+            query: req.query.search,
+            path: "searchTerms",
+            fuzzy: { maxEdits: 1 },
+            score: { boost: { value: 2 } },
+          },
+        },
+      ];
+      searchStage.$search.compound.minimumShouldMatch = 1;
     }
 
     // === Sorting ===
     let sortStage = {};
-    if (req.query.sort_by) {
+    if (req.query.search) {
+      // When searching, sort by relevance score descending
+      sortStage = { $sort: { score: { $meta: "textScore" } } };
+    } else if (req.query.sort_by) {
       switch (req.query.sort_by) {
         case "price_asc":
           sortStage = { $sort: { price: 1 } };
@@ -275,16 +295,14 @@ const publicGetAllProducts = async (req, res) => {
       sortStage = { $sort: { createdAt: -1 } };
     }
 
-    // === Aggregation Pipeline ===
+    // === Pipeline ===
     const pipeline = [
       searchStage,
       sortStage,
       { $skip: skip },
       { $limit: limit },
-    ];
 
-    // === Lookup for population ===
-    pipeline.push(
+      // Populations
       {
         $lookup: {
           from: "brands",
@@ -333,18 +351,18 @@ const publicGetAllProducts = async (req, res) => {
           foreignField: "_id",
           as: "tags",
         },
-      }
-    );
+      },
+    ];
 
-    // === Count total separately ===
+    // === Count ===
     const countPipeline = [searchStage, { $count: "count" }];
     const countResult = await Product.aggregate(countPipeline);
     const totalCount = countResult[0]?.count || 0;
 
-    // === Execute pipeline ===
+    // === Run main ===
     let results = await Product.aggregate(pipeline);
 
-    // === Apply pricing transform ===
+    // === Transform ===
     results = results.map((product) => {
       const basePrice = product.price;
 
@@ -410,7 +428,7 @@ const publicGetAllProducts = async (req, res) => {
       };
     });
 
-    // === Build next/prev ===
+    // === Next/Prev ===
     const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
       req.path
     }`;
