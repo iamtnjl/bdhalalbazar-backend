@@ -173,12 +173,22 @@ const createProduct = async (req, res) => {
 
 const publicGetAllProducts = async (req, res) => {
   try {
-    let query = { is_published: true };
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.show) || 20;
+    const skip = (page - 1) * limit;
+
+    // === Build filters ===
+    const must = [{ equals: { path: "is_published", value: true } }];
 
     if (req.query.minPrice || req.query.maxPrice) {
-      query.price = {};
-      if (req.query.minPrice) query.price.$gte = parseFloat(req.query.minPrice);
-      if (req.query.maxPrice) query.price.$lte = parseFloat(req.query.maxPrice);
+      const range = {};
+      if (req.query.minPrice) {
+        range.gte = parseFloat(req.query.minPrice);
+      }
+      if (req.query.maxPrice) {
+        range.lte = parseFloat(req.query.maxPrice);
+      }
+      must.push({ range: { path: "price", ...range } });
     }
 
     const convertToArray = (value) => value.split(",");
@@ -188,86 +198,154 @@ const publicGetAllProducts = async (req, res) => {
       return items.map((item) => item._id);
     };
 
-    const applySlugFilter = async (field, model) => {
-      if (req.query[field]) {
-        const slugs = convertToArray(req.query[field]);
-        const ids = await fetchObjectIds(model, slugs);
-        query[field] = { $in: ids };
-      }
+    if (req.query.brand) {
+      const ids = await fetchObjectIds(Brand, convertToArray(req.query.brand));
+      must.push({ in: { path: "brand", value: ids } });
+    }
+
+    if (req.query.categories) {
+      const ids = await fetchObjectIds(
+        Category,
+        convertToArray(req.query.categories)
+      );
+      must.push({ in: { path: "categories", value: ids } });
+    }
+
+    if (req.query.materials) {
+      const ids = await fetchObjectIds(
+        Material,
+        convertToArray(req.query.materials)
+      );
+      must.push({ in: { path: "materials", value: ids } });
+    }
+
+    if (req.query.colors) {
+      const ids = await fetchObjectIds(Color, convertToArray(req.query.colors));
+      must.push({ in: { path: "colors", value: ids } });
+    }
+
+    if (req.query.subCategory) {
+      const ids = await fetchObjectIds(
+        SubCategory,
+        convertToArray(req.query.subCategory)
+      );
+      must.push({ in: { path: "subCategory", value: ids } });
+    }
+
+    const searchStage = {
+      $search: {
+        index: "default",
+        compound: {
+          must: must,
+        },
+      },
     };
 
-    await applySlugFilter("brand", Brand);
-    await applySlugFilter("categories", Category);
-    await applySlugFilter("materials", Material);
-    await applySlugFilter("colors", Color);
-    await applySlugFilter("subCategory", SubCategory);
+    if (req.query.search) {
+      searchStage.$search.compound.must.push({
+        text: {
+          query: req.query.search,
+          path: ["name.en", "name.bn", "searchTerms"],
+          fuzzy: { maxEdits: 2 },
+        },
+      });
+    }
 
-    let sort = {};
+    // === Sorting ===
+    let sortStage = {};
     if (req.query.sort_by) {
       switch (req.query.sort_by) {
         case "price_asc":
-          sort = { price: 1 };
+          sortStage = { $sort: { price: 1 } };
           break;
         case "price_desc":
-          sort = { price: -1 };
+          sortStage = { $sort: { price: -1 } };
           break;
         case "newest":
-          sort = { createdAt: -1 };
+          sortStage = { $sort: { createdAt: -1 } };
           break;
         case "oldest":
-          sort = { createdAt: 1 };
+          sortStage = { $sort: { createdAt: 1 } };
           break;
         default:
-          sort = { createdAt: -1 };
+          sortStage = { $sort: { createdAt: -1 } };
           break;
       }
+    } else {
+      sortStage = { $sort: { createdAt: -1 } };
     }
 
-    let products = await Product.find(query)
-      .populate(["brand", "materials", "categories", "colors", "tags"])
-      .sort(sort);
+    // === Aggregation Pipeline ===
+    const pipeline = [
+      searchStage,
+      sortStage,
+      { $skip: skip },
+      { $limit: limit },
+    ];
 
-    // === Apply Fuse.js search if search is provided ===
-    if (req.query.search) {
-      const fuse = new Fuse(products, {
-        keys: [
-          { name: "name.en", weight: 0.5 },
-          { name: "name.bn", weight: 0.5 },
-          { name: "searchTerms", weight: 0.5 },
-        ],
-        threshold: 0.4,
-      });
+    // === Lookup for population ===
+    pipeline.push(
+      {
+        $lookup: {
+          from: "brands",
+          localField: "brand",
+          foreignField: "_id",
+          as: "brand",
+        },
+      },
+      {
+        $lookup: {
+          from: "materials",
+          localField: "materials",
+          foreignField: "_id",
+          as: "materials",
+        },
+      },
+      {
+        $lookup: {
+          from: "categories",
+          localField: "categories",
+          foreignField: "_id",
+          as: "categories",
+        },
+      },
+      {
+        $lookup: {
+          from: "subcategories",
+          localField: "subCategory",
+          foreignField: "_id",
+          as: "subCategory",
+        },
+      },
+      { $unwind: { path: "$subCategory", preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: "colors",
+          localField: "colors",
+          foreignField: "_id",
+          as: "colors",
+        },
+      },
+      {
+        $lookup: {
+          from: "tags",
+          localField: "tags",
+          foreignField: "_id",
+          as: "tags",
+        },
+      }
+    );
 
-      const fuseResults = fuse.search(req.query.search);
-      products = fuseResults.map((r) => r.item);
-    }
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const totalCount = products.length;
+    // === Count total separately ===
+    const countPipeline = [searchStage, { $count: "count" }];
+    const countResult = await Product.aggregate(countPipeline);
+    const totalCount = countResult[0]?.count || 0;
 
-    const start = (page - 1) * limit;
-    const end = start + limit;
+    // === Execute pipeline ===
+    let results = await Product.aggregate(pipeline);
 
-    const paginatedResults = products.slice(start, end);
-
-    const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
-      req.path
-    }`;
-
-    const queryParams = new URLSearchParams(req.query);
-    queryParams.set("show", limit);
-    queryParams.delete("page");
-
-    const nextPage =
-      page * limit < totalCount
-        ? `${baseUrl}?${queryParams.toString()}&page=${page + 1}`
-        : null;
-
-    const prevPage =
-      page > 1 ? `${baseUrl}?${queryParams.toString()}&page=${page - 1}` : null;
-
-    // === Map your pricing logic ===
-    const results = paginatedResults.map((product) => {
+    // === Apply pricing transform ===
+    results = results.map((product) => {
       const basePrice = product.price;
 
       const hasMRPTag = product.tags?.some(
@@ -308,7 +386,17 @@ const publicGetAllProducts = async (req, res) => {
           name: c.name,
           slug: c.slug,
         })),
+        sub_category: product?.subCategory
+          ? {
+              name: product.subCategory.name,
+              slug: product.subCategory.slug,
+            }
+          : null,
         colors: product.colors.map((c) => ({ name: c.name, slug: c.slug })),
+        tags: product.tags?.map((t) => ({
+          name: t.name,
+          margin: t.margin,
+        })),
         primary_image: product.primary_image,
         weight: product.weight,
         unit: product.unit,
@@ -322,7 +410,22 @@ const publicGetAllProducts = async (req, res) => {
       };
     });
 
-    // ✅ Final response shape
+    // === Build next/prev ===
+    const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
+      req.path
+    }`;
+    const queryParams = new URLSearchParams(req.query);
+    queryParams.set("show", limit);
+    queryParams.delete("page");
+
+    const nextPage =
+      page * limit < totalCount
+        ? `${baseUrl}?${queryParams.toString()}&page=${page + 1}`
+        : null;
+
+    const prevPage =
+      page > 1 ? `${baseUrl}?${queryParams.toString()}&page=${page - 1}` : null;
+
     res.status(200).json({
       count: totalCount,
       next: nextPage,
