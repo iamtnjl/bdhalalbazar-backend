@@ -177,7 +177,6 @@ const publicGetAllProducts = async (req, res) => {
     const limit = parseInt(req.query.show) || 20;
     const skip = (page - 1) * limit;
 
-    // === Filters ===
     const must = [{ equals: { path: "is_published", value: true } }];
 
     if (req.query.minPrice || req.query.maxPrice) {
@@ -198,44 +197,28 @@ const publicGetAllProducts = async (req, res) => {
       const ids = await fetchObjectIds(Brand, convertToArray(req.query.brand));
       must.push({ in: { path: "brand", value: ids } });
     }
-
     if (req.query.categories) {
-      const ids = await fetchObjectIds(
-        Category,
-        convertToArray(req.query.categories)
-      );
+      const ids = await fetchObjectIds(Category, convertToArray(req.query.categories));
       must.push({ in: { path: "categories", value: ids } });
     }
-
     if (req.query.materials) {
-      const ids = await fetchObjectIds(
-        Material,
-        convertToArray(req.query.materials)
-      );
+      const ids = await fetchObjectIds(Material, convertToArray(req.query.materials));
       must.push({ in: { path: "materials", value: ids } });
     }
-
     if (req.query.colors) {
       const ids = await fetchObjectIds(Color, convertToArray(req.query.colors));
       must.push({ in: { path: "colors", value: ids } });
     }
-
     if (req.query.subCategory) {
-      const ids = await fetchObjectIds(
-        SubCategory,
-        convertToArray(req.query.subCategory)
-      );
+      const ids = await fetchObjectIds(SubCategory, convertToArray(req.query.subCategory));
       must.push({ in: { path: "subCategory", value: ids } });
     }
 
-    // === Atlas Search ===
     const searchStage = {
       $search: {
         index: "default",
-        compound: {
-          must: must,
-        },
-      },
+        compound: { must }
+      }
     };
 
     if (req.query.search) {
@@ -245,33 +228,31 @@ const publicGetAllProducts = async (req, res) => {
             query: req.query.search,
             path: "name.en",
             fuzzy: { maxEdits: 2 },
-            score: { boost: { value: 3 } },
-          },
+            score: { boost: { value: 3 } }
+          }
         },
         {
           text: {
             query: req.query.search,
             path: "name.bn",
             fuzzy: { maxEdits: 2 },
-            score: { boost: { value: 3 } },
-          },
+            score: { boost: { value: 3 } }
+          }
         },
         {
           text: {
             query: req.query.search,
             path: "searchTerms",
             fuzzy: { maxEdits: 1 },
-            score: { boost: { value: 2 } },
-          },
-        },
+            score: { boost: { value: 2 } }
+          }
+        }
       ];
       searchStage.$search.compound.minimumShouldMatch = 1;
     }
 
-    // === Sorting ===
     let sortStage = {};
     if (req.query.search) {
-      // When searching, sort by relevance score descending
       sortStage = { $sort: { score: { $meta: "textScore" } } };
     } else if (req.query.sort_by) {
       switch (req.query.sort_by) {
@@ -289,103 +270,109 @@ const publicGetAllProducts = async (req, res) => {
           break;
         default:
           sortStage = { $sort: { createdAt: -1 } };
-          break;
       }
     } else {
       sortStage = { $sort: { createdAt: -1 } };
     }
 
-    // === Pipeline ===
     const pipeline = [
       searchStage,
       sortStage,
-      { $skip: skip },
-      { $limit: limit },
+      {
+        $facet: {
+          results: [
+            { $skip: skip },
+            { $limit: limit },
 
-      // Populations
-      {
-        $lookup: {
-          from: "brands",
-          localField: "brand",
-          foreignField: "_id",
-          as: "brand",
-        },
-      },
-      {
-        $lookup: {
-          from: "materials",
-          localField: "materials",
-          foreignField: "_id",
-          as: "materials",
-        },
-      },
-      {
-        $lookup: {
-          from: "categories",
-          localField: "categories",
-          foreignField: "_id",
-          as: "categories",
-        },
-      },
-      {
-        $lookup: {
-          from: "subcategories",
-          localField: "subCategory",
-          foreignField: "_id",
-          as: "subCategory",
-        },
-      },
-      { $unwind: { path: "$subCategory", preserveNullAndEmptyArrays: true } },
-      {
-        $lookup: {
-          from: "colors",
-          localField: "colors",
-          foreignField: "_id",
-          as: "colors",
-        },
-      },
-      {
-        $lookup: {
-          from: "tags",
-          localField: "tags",
-          foreignField: "_id",
-          as: "tags",
-        },
-      },
+            // ✅ Safe lookups with $ifNull
+            {
+              $lookup: {
+                from: "brands",
+                let: { brandId: { $ifNull: ["$brand", null] } },
+                pipeline: [
+                  { $match: { $expr: { $eq: ["$_id", "$$brandId"] } } },
+                  { $project: { name: 1, slug: 1 } }
+                ],
+                as: "brand"
+              }
+            },
+            {
+              $lookup: {
+                from: "materials",
+                let: { ids: { $ifNull: ["$materials", []] } },
+                pipeline: [
+                  { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
+                  { $project: { name: 1, slug: 1 } }
+                ],
+                as: "materials"
+              }
+            },
+            {
+              $lookup: {
+                from: "categories",
+                let: { ids: { $ifNull: ["$categories", []] } },
+                pipeline: [
+                  { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
+                  { $project: { name: 1, slug: 1 } }
+                ],
+                as: "categories"
+              }
+            },
+            {
+              $lookup: {
+                from: "subcategories",
+                let: { id: { $ifNull: ["$subCategory", null] } },
+                pipeline: [
+                  { $match: { $expr: { $eq: ["$_id", "$$id"] } } },
+                  { $project: { name: 1, slug: 1 } }
+                ],
+                as: "subCategory"
+              }
+            },
+            { $unwind: { path: "$subCategory", preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from: "colors",
+                let: { ids: { $ifNull: ["$colors", []] } },
+                pipeline: [
+                  { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
+                  { $project: { name: 1, slug: 1 } }
+                ],
+                as: "colors"
+              }
+            },
+            {
+              $lookup: {
+                from: "tags",
+                let: { ids: { $ifNull: ["$tags", []] } },
+                pipeline: [
+                  { $match: { $expr: { $in: ["$_id", "$$ids"] } } },
+                  { $project: { name: 1, margin: 1 } }
+                ],
+                as: "tags"
+              }
+            }
+          ],
+          totalCount: [{ $count: "count" }]
+        }
+      }
     ];
 
-    // === Count ===
-    const countPipeline = [searchStage, { $count: "count" }];
-    const countResult = await Product.aggregate(countPipeline);
-    const totalCount = countResult[0]?.count || 0;
+    const data = await Product.aggregate(pipeline).allowDiskUse(true);
 
-    // === Run main ===
-    let results = await Product.aggregate(pipeline);
+    const results = data[0].results;
+    const totalCount = data[0].totalCount[0]?.count || 0;
 
-    // === Transform ===
-    results = results.map((product) => {
+    const transformed = results.map((product) => {
       const basePrice = product.price;
-
       const hasMRPTag = product.tags?.some(
         (tag) => tag.name?.toLowerCase() === "mrp"
       );
+      let sellingPrice = hasMRPTag && product.mrp_price
+        ? product.mrp_price
+        : basePrice + (basePrice * Math.max(...(product.tags?.map(t => t.margin || 0) || [0]))) / 100;
 
-      let sellingPrice;
-      if (hasMRPTag && product.mrp_price) {
-        sellingPrice = product.mrp_price;
-      } else {
-        const tagMargins =
-          product.tags?.length > 0
-            ? product.tags.map((t) => t.margin || 0)
-            : [0];
-        const maxMargin = Math.max(...tagMargins);
-        sellingPrice = basePrice + (basePrice * maxMargin) / 100;
-      }
-
-      const discountPercent = product.discount || 0;
-      const discountedPrice =
-        sellingPrice - (sellingPrice * discountPercent) / 100;
-
+      const discountedPrice = sellingPrice - (sellingPrice * (product.discount || 0)) / 100;
       const formatNumber = (num) =>
         num % 1 === 0 ? parseInt(num) : parseFloat(num.toFixed(2));
 
@@ -393,28 +380,13 @@ const publicGetAllProducts = async (req, res) => {
         _id: product._id,
         name: product.name,
         price: formatNumber(sellingPrice),
-        discount: discountPercent,
         discounted_price: formatNumber(discountedPrice),
-        brand: product.brand.map((b) => ({ name: b.name, slug: b.slug })),
-        materials: product.materials.map((m) => ({
-          name: m.name,
-          slug: m.slug,
-        })),
-        categories: product.categories.map((c) => ({
-          name: c.name,
-          slug: c.slug,
-        })),
-        sub_category: product?.subCategory
-          ? {
-              name: product.subCategory.name,
-              slug: product.subCategory.slug,
-            }
-          : null,
-        colors: product.colors.map((c) => ({ name: c.name, slug: c.slug })),
-        tags: product.tags?.map((t) => ({
-          name: t.name,
-          margin: t.margin,
-        })),
+        brand: product.brand,
+        materials: product.materials,
+        categories: product.categories,
+        sub_category: product?.subCategory || null,
+        colors: product.colors,
+        tags: product.tags,
         primary_image: product.primary_image,
         weight: product.weight,
         unit: product.unit,
@@ -428,33 +400,32 @@ const publicGetAllProducts = async (req, res) => {
       };
     });
 
-    // === Next/Prev ===
-    const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${
-      req.path
-    }`;
+    const baseUrl = `${req.protocol}://${req.get("host")}${req.baseUrl}${req.path}`;
     const queryParams = new URLSearchParams(req.query);
     queryParams.set("show", limit);
     queryParams.delete("page");
 
-    const nextPage =
-      page * limit < totalCount
-        ? `${baseUrl}?${queryParams.toString()}&page=${page + 1}`
-        : null;
+    const nextPage = page * limit < totalCount
+      ? `${baseUrl}?${queryParams.toString()}&page=${page + 1}`
+      : null;
 
-    const prevPage =
-      page > 1 ? `${baseUrl}?${queryParams.toString()}&page=${page - 1}` : null;
+    const prevPage = page > 1
+      ? `${baseUrl}?${queryParams.toString()}&page=${page - 1}`
+      : null;
 
     res.status(200).json({
       count: totalCount,
       next: nextPage,
       previous: prevPage,
-      results,
+      results: transformed,
     });
+
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error.message });
   }
 };
+
 
 const getAllProducts = async (req, res) => {
   try {
