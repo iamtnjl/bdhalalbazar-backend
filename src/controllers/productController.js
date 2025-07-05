@@ -194,39 +194,21 @@ const publicGetAllProducts = async (req, res) => {
       return items.map((item) => item._id);
     };
 
-    if (req.query.brand) {
-      const ids = await fetchObjectIds(Brand, convertToArray(req.query.brand));
-      must.push({ in: { path: "brand", value: ids } });
-    }
+    const applySlugFilter = async (field, model) => {
+      if (req.query[field]) {
+        const slugs = convertToArray(req.query[field]);
+        const ids = await fetchObjectIds(model, slugs);
+        if (ids.length) {
+          must.push({ in: { path: field, value: ids } });
+        }
+      }
+    };
 
-    if (req.query.categories) {
-      const ids = await fetchObjectIds(
-        Category,
-        convertToArray(req.query.categories)
-      );
-      must.push({ in: { path: "categories", value: ids } });
-    }
-
-    if (req.query.materials) {
-      const ids = await fetchObjectIds(
-        Material,
-        convertToArray(req.query.materials)
-      );
-      must.push({ in: { path: "materials", value: ids } });
-    }
-
-    if (req.query.colors) {
-      const ids = await fetchObjectIds(Color, convertToArray(req.query.colors));
-      must.push({ in: { path: "colors", value: ids } });
-    }
-
-    if (req.query.subCategory) {
-      const ids = await fetchObjectIds(
-        SubCategory,
-        convertToArray(req.query.subCategory)
-      );
-      must.push({ in: { path: "subCategory", value: ids } });
-    }
+    await applySlugFilter("brand", Brand);
+    await applySlugFilter("categories", Category);
+    await applySlugFilter("materials", Material);
+    await applySlugFilter("colors", Color);
+    await applySlugFilter("subCategory", SubCategory);
 
     // === Atlas Search ===
     const searchStage = {
@@ -342,14 +324,6 @@ const publicGetAllProducts = async (req, res) => {
           localField: "colors",
           foreignField: "_id",
           as: "colors",
-        },
-      },
-      {
-        $lookup: {
-          from: "tags",
-          localField: "tags",
-          foreignField: "_id",
-          as: "tags",
         },
       },
     ];
