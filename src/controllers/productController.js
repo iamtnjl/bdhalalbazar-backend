@@ -243,7 +243,7 @@ const publicGetAllProducts = async (req, res) => {
             query: req.query.search,
             path: "searchTerms",
             fuzzy: { maxEdits: 1 },
-            score: { boost: { value: 2 } },
+            score: { boost: { value: 6 } },
           },
         },
       ];
@@ -510,8 +510,8 @@ const getAllProducts = async (req, res) => {
           text: {
             query: req.query.search,
             path: "searchTerms",
-            fuzzy: { maxEdits: 1 },
-            score: { boost: { value: 2 } },
+            fuzzy: { maxEdits: 0 },
+            score: { boost: { value: 6 } },
           },
         },
       ];
