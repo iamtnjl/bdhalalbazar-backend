@@ -1,4 +1,6 @@
+const mongoose = require("mongoose");
 const Product = require("../models/productModel");
+const ProductLog = require("../models/ProductLogModel");
 const Brand = require("../models/brandModel");
 const Tag = require("../models/tagsModel");
 const SubCategory = require("../models/SubCategoryModel");
@@ -60,7 +62,6 @@ const createProduct = async (req, res) => {
         return res.status(400).json({ message: "Invalid subCategory" });
       }
 
-      // Ensure subCategory matches one of the selected categories
       if (
         !categoryDocs.find((cat) => cat._id.equals(subCategoryDoc.category))
       ) {
@@ -69,11 +70,11 @@ const createProduct = async (req, res) => {
         });
       }
     }
+
     // Handle images
     let primaryImage = {};
     let multipleImages = [];
 
-    // Handle single primary image upload
     if (req.files && req.files.primary_image) {
       const primaryImageUpload = await cloudinary.uploader.upload(
         req.files.primary_image[0].path,
@@ -103,7 +104,6 @@ const createProduct = async (req, res) => {
       };
     }
 
-    // Handle multiple image uploads
     if (req.files && req.files.images) {
       for (let i = 0; i < req.files.images.length; i++) {
         const imageUpload = await cloudinary.uploader.upload(
@@ -161,9 +161,14 @@ const createProduct = async (req, res) => {
       weight,
       unit,
       manufacturer,
+
+      // ✅ ✅ ✅ The key part!
+      createdBy: req.user._id,
+      updatedBy: req.user._id,
     });
 
     await product.save();
+
     res.status(201).json(product);
   } catch (error) {
     console.error(error);
@@ -931,58 +936,58 @@ const updateProduct = async (req, res) => {
       searchTerms,
       mrp_price,
     } = req.body;
+
     if (typeof name === "string") name = JSON.parse(name);
     if (typeof description === "string") description = JSON.parse(description);
 
-    const updateData = {};
+    const product = await Product.findById(id);
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
+    }
 
-    // Basic fields
-    if (name) updateData.name = name;
-    if (price) updateData.price = price;
-    if (mrp_price) updateData.mrp_price = mrp_price;
-    if (discount) updateData.discount = discount;
-    if (weight) updateData.weight = weight;
-    if (unit) updateData.unit = unit;
-    if (description) updateData.description = description;
-    if (manufacturer) updateData.manufacturer = manufacturer;
-    if (is_published !== undefined) updateData.is_published = is_published;
-    if (status) updateData.status = status;
+    // ✅ Modify fields directly
+    if (name) product.name = name;
+    if (price) product.price = price;
+    if (mrp_price) product.mrp_price = mrp_price;
+    if (discount) product.discount = discount;
+    if (weight) product.weight = weight;
+    if (unit) product.unit = unit;
+    if (description) product.description = description;
+    if (manufacturer) product.manufacturer = manufacturer;
+    if (is_published !== undefined) product.is_published = is_published;
+    if (status) product.status = status;
 
-    // Search Terms: if provided, split and trim
     if (searchTerms) {
       if (typeof searchTerms === "string") {
-        updateData.searchTerms = searchTerms.split(",").map((s) => s.trim());
+        product.searchTerms = searchTerms.split(",").map((s) => s.trim());
       } else if (Array.isArray(searchTerms)) {
-        updateData.searchTerms = searchTerms;
+        product.searchTerms = searchTerms;
       }
     }
 
-    // Tags: assume they come as array of IDs or strings
     if (tags) {
-      updateData.tags = Array.isArray(tags)
+      product.tags = Array.isArray(tags)
         ? tags
         : tags.split(",").map((t) => t.trim());
     }
 
-    // Subcategory: fetch and validate
     if (subCategory) {
       const subCategoryDoc = await SubCategory.findOne({ slug: subCategory });
       if (!subCategoryDoc) {
         return res.status(400).json({ message: "Invalid subCategory" });
       }
-      updateData.subCategory = subCategoryDoc._id;
+      product.subCategory = subCategoryDoc._id;
     }
 
-    // Fetch referenced IDs
     if (brand) {
       const brandSlugs = toSlugArray(brand);
       const brandDocs = await Brand.find({ slug: { $in: brandSlugs } });
-      updateData.brand = brandDocs.map((b) => b._id);
+      product.brand = brandDocs.map((b) => b._id);
     }
 
     if (categories) {
       const categoryDocs = await Category.find({ slug: { $in: categories } });
-      updateData.categories = categoryDocs.map((c) => c._id);
+      product.categories = categoryDocs.map((c) => c._id);
     }
 
     if (materials) {
@@ -990,16 +995,15 @@ const updateProduct = async (req, res) => {
       const materialDocs = await Material.find({
         slug: { $in: materialSlugs },
       });
-      updateData.materials = materialDocs.map((m) => m._id);
+      product.materials = materialDocs.map((m) => m._id);
     }
 
     if (colors) {
       const colorSlugs = toSlugArray(colors);
       const colorDocs = await Color.find({ slug: { $in: colorSlugs } });
-      updateData.colors = colorDocs.map((c) => c._id);
+      product.colors = colorDocs.map((c) => c._id);
     }
 
-    // Handle primary image
     if (req.files?.primary_image) {
       const file = req.files.primary_image[0];
       const [original, thumbnail, medium] = await Promise.all([
@@ -1013,19 +1017,20 @@ const updateProduct = async (req, res) => {
           transformation: [{ width: 600, height: 600, crop: "limit" }],
         }),
       ]);
-      updateData.primary_image = {
+      product.primary_image = {
         original: original.secure_url,
         thumbnail: thumbnail.secure_url,
         medium: medium.secure_url,
       };
     }
 
-    // Handle multiple images
     if (req.files?.images?.length > 0) {
       const multipleImages = await Promise.all(
         req.files.images.map(async (file) => {
           const [original, thumbnail, medium] = await Promise.all([
-            cloudinary.uploader.upload(file.path, { folder: "product_images" }),
+            cloudinary.uploader.upload(file.path, {
+              folder: "product_images",
+            }),
             cloudinary.uploader.upload(file.path, {
               folder: "product_images",
               transformation: [{ width: 150, height: 150, crop: "fill" }],
@@ -1042,20 +1047,15 @@ const updateProduct = async (req, res) => {
           };
         })
       );
-      updateData.images = multipleImages;
+      product.images = multipleImages;
     }
 
-    // Final update
-    const updatedProduct = await Product.findByIdAndUpdate(id, updateData, {
-      new: true,
-      runValidators: true,
-    });
+    // ✅ Set `updatedBy` for audit trail
+    product.updatedBy = req.user._id;
 
-    if (!updatedProduct) {
-      return res.status(404).json({ message: "Product not found" });
-    }
+    await product.save();
 
-    res.status(200).json(updatedProduct);
+    res.status(200).json(product);
   } catch (error) {
     console.error("Product update error:", error);
     res.status(500).json({ error: error.message });
@@ -1111,6 +1111,139 @@ const deleteProductById = async (req, res) => {
   }
 };
 
+const dailyProductLogByUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+
+    const logs = await ProductLog.find({
+      changedBy: userId,
+      createdAt: { $gte: start, $lte: end },
+    }).lean();
+
+    const createdIds = new Set();
+    const updateLogs = [];
+
+    for (const log of logs) {
+      if (log.action === "create") {
+        createdIds.add(log.refId.toString());
+      } else if (log.action === "update") {
+        updateLogs.push(log);
+      }
+    }
+
+    const addedProducts = await Product.find({
+      _id: { $in: Array.from(createdIds) },
+    })
+      .populate("categories", "name")
+      .populate("subCategory", "name")
+      .lean();
+
+    const added = addedProducts.map((p) => ({
+      _id: p._id,
+      name: p.name,
+      categories: p.categories,
+      subCategory: p.subCategory,
+      weight: p.weight,
+      unit: p.unit,
+      primary_image: p.primary_image,
+    }));
+
+    const updatedMap = new Map();
+
+    for (const log of updateLogs) {
+      let entry = updatedMap.get(log.refId.toString());
+      if (!entry) {
+        const product = await Product.findById(log.refId)
+          .populate("categories", "name")
+          .populate("subCategory", "name")
+          .lean();
+
+        if (!product) continue;
+
+        entry = {
+          _id: product._id,
+          name: product.name,
+          categories: product.categories,
+          subCategory: product.subCategory,
+          weight: product.weight,
+          unit: product.unit,
+          primary_image: product.primary_image,
+          changes: [],
+        };
+
+        updatedMap.set(log.refId.toString(), entry);
+      }
+
+      for (const change of log.changes) {
+        const resolvedChange = {
+          field: change.field,
+          oldValue: change.oldValue,
+          newValue: change.newValue,
+        };
+
+        let refModel = null;
+        if (change.field.includes("brand")) refModel = Brand;
+        else if (change.field.includes("categories")) refModel = Category;
+        else if (change.field.includes("subCategory")) refModel = SubCategory;
+        else if (change.field.includes("materials")) refModel = Material;
+        else if (change.field.includes("tags")) refModel = Tag;
+        else if (change.field.includes("colors")) refModel = Color;
+
+        if (refModel) {
+          // Replace with resolved name(s)
+          if (Array.isArray(change.oldValue) && change.oldValue.length) {
+            const oldDocs = await refModel
+              .find({ _id: { $in: change.oldValue } })
+              .select("name")
+              .lean();
+            resolvedChange.oldValue = oldDocs.map((d) => d.name);
+          } else if (mongoose.isValidObjectId(change.oldValue)) {
+            const oldDoc = await refModel
+              .findById(change.oldValue)
+              .select("name")
+              .lean();
+            resolvedChange.oldValue = oldDoc?.name || null;
+          }
+
+          if (Array.isArray(change.newValue) && change.newValue.length) {
+            const newDocs = await refModel
+              .find({ _id: { $in: change.newValue } })
+              .select("name")
+              .lean();
+            resolvedChange.newValue = newDocs.map((d) => d.name);
+          } else if (mongoose.isValidObjectId(change.newValue)) {
+            const newDoc = await refModel
+              .findById(change.newValue)
+              .select("name")
+              .lean();
+            resolvedChange.newValue = newDoc?.name || null;
+          }
+        }
+
+        entry.changes.push(resolvedChange);
+      }
+    }
+
+    const updated = Array.from(updatedMap.values());
+
+    return res.status(200).json({
+      totalAddedCount: added.length,
+      totalUpdatedCount: updated.length,
+      added,
+      updated,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
 module.exports = {
   createProduct,
   publicGetAllProducts,
@@ -1120,4 +1253,5 @@ module.exports = {
   updateProduct,
   updateProductVisibility,
   deleteProductById,
+  dailyProductLogByUser,
 };

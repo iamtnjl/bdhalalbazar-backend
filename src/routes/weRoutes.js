@@ -5,6 +5,7 @@ const upload = require("../middlewares/multer");
 const {
   getAllUsers,
   getUserDetailsById,
+  getAllAdminUser,
 } = require("../controllers/userController");
 const {
   getAllOrders,
@@ -19,7 +20,7 @@ const { getAllBrands, createBrand } = require("../controllers/brandController");
 const { getAllColors, createColor } = require("../controllers/colorController");
 const {
   getAllProducts,
-  getProductDetails,
+  dailyProductLogByUser,
   getAdminProductDetails,
   createProduct,
   updateProduct,
@@ -56,6 +57,7 @@ router.get("/dashboard", getDashboardStats);
 //Admin user API
 router.get("/", getAllUsers);
 router.get("/users/:id", getUserDetailsById);
+router.get("/admin-users", getAllAdminUser);
 
 // Brands API
 router.get("/brands", getAllBrands);
@@ -113,6 +115,7 @@ router.patch(
 );
 router.patch("/product/:id/publish", updateProductVisibility);
 router.delete("/product/:id", deleteProductById);
+router.get("/product-log/:userId", dailyProductLogByUser);
 
 //Settings API
 router.get("/settings", getSettings);

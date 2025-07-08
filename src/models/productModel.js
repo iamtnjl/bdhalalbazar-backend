@@ -1,4 +1,6 @@
 const mongoose = require("mongoose");
+const productLogPlugin = require("../plugins/ProductLogPlugin");
+require("./ProductLogModel");
 
 async function generateId() {
   const { nanoid } = await import("nanoid");
@@ -82,22 +84,29 @@ const ProductSchema = new mongoose.Schema(
     },
     ad_pixel_id: { type: String, default: null },
     manufacturer: { type: String },
+
+    // ✅ track who created & updated
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
   },
   { timestamps: true, toJSON: { getters: true } }
 );
 
-// Pre-save hook to generate stock_id and populate searchTerms
+// Generate stock_id and search terms
 ProductSchema.pre("save", async function (next) {
   if (!this.stock_id) {
     this.stock_id = await generateId();
   }
 
-  // Make sure searchTerms exists
-  if (!this.searchTerms) {
-    this.searchTerms = [];
-  }
+  if (!this.searchTerms) this.searchTerms = [];
 
-  // Always add name.en
   if (this.name?.en) {
     const term = this.name.en.toLowerCase();
     if (!this.searchTerms.includes(term)) {
@@ -105,7 +114,6 @@ ProductSchema.pre("save", async function (next) {
     }
   }
 
-  // Always add name.bn
   if (this.name?.bn) {
     const term = this.name.bn.toLowerCase();
     if (!this.searchTerms.includes(term)) {
@@ -114,6 +122,11 @@ ProductSchema.pre("save", async function (next) {
   }
 
   next();
+});
+
+ProductSchema.plugin(productLogPlugin, {
+  logModelName: "ProductLog",
+  userField: "updatedBy",
 });
 
 module.exports = mongoose.model("Product", ProductSchema);

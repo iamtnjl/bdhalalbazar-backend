@@ -219,6 +219,26 @@ const getUserDetailsById = async (req, res) => {
   }
 };
 
+const getAllAdminUser = async (req, res) => {
+  try {
+    const admins = await User.find({ role: "admin" })
+      .select("name phone createdAt lastLogin role")
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: admins.length,
+      data: admins,
+    });
+  } catch (error) {
+    console.error("Error fetching admin users:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Something went wrong while fetching admin users",
+    });
+  }
+};
+
 module.exports = {
   registerUser,
   loginUser,
@@ -226,4 +246,5 @@ module.exports = {
   saveFcmToken,
   setupPassword,
   getUserDetailsById,
+  getAllAdminUser,
 };
