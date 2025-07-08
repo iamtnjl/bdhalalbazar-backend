@@ -1,7 +1,6 @@
 const Cart = require("../models/cartModel");
 const Product = require("../models/productModel");
 const Settings = require("../models/settingsModel");
-const Category = require("../models/categoryModel");
 const Order = require("../models/orderModel");
 
 const addOrUpdateCart = async (req, res) => {
@@ -15,27 +14,16 @@ const addOrUpdateCart = async (req, res) => {
       ? req.body.cart
       : [req.body.cart];
 
-    // Fetch profit margin and profit categories once
     const settings = await Settings.findOne();
-    const profitMargin = settings?.profit_margin || 0;
-
-    const profitCategorySlugs = [
-      "vegetable",
-      "meat",
-      "beef",
-      "mutton",
-      "chicken",
-      "fish",
-    ];
-    const profitCategories = await Category.find({
-      slug: { $in: profitCategorySlugs },
-    });
-    const profitCategoryIds = profitCategories.map((cat) => cat._id.toString());
+    const delivery_charge = settings?.delivery_charge || 0;
+    const platform_fee = settings?.platform_fee || 0;
 
     let cart = await Cart.findOne({ deviceId });
     if (!cart) {
-      cart = new Cart({ deviceId, cart_products: [] });
+      cart = { deviceId, cart_products: [] };
     }
+
+    let newCartProducts = cart.cart_products || [];
 
     for (let { productId, quantity } of products) {
       if (!productId || quantity < 0) {
@@ -44,122 +32,135 @@ const addOrUpdateCart = async (req, res) => {
           .json({ message: "Invalid productId or quantity" });
       }
 
-      const product = await Product.findById(productId).populate("categories");
+      const product = await Product.findById(productId).populate([
+        { path: "tags" },
+      ]);
       if (!product) {
         return res
           .status(404)
           .json({ message: `Product ${productId} not found` });
       }
 
-      // Check if product category requires profit margin
-      const isProfitApplied = product.categories.some((cat) =>
-        profitCategoryIds.includes(cat._id.toString())
+      const basePrice = product.price;
+
+      const hasMRPTag = product.tags?.some(
+        (tag) => tag.name?.toLowerCase() === "mrp"
       );
 
-      // Apply profit margin if needed
-      const basePrice = product.price;
-      const priceWithProfit = isProfitApplied
-        ? parseFloat((basePrice + (basePrice * profitMargin) / 100).toFixed(2))
-        : basePrice;
+      let sellingPrice;
+      if (hasMRPTag && product.mrp_price) {
+        sellingPrice = product.mrp_price;
+      } else {
+        const tagMargins =
+          product.tags?.length > 0
+            ? product.tags.map((t) => t.margin || 0)
+            : [0];
+        const maxMargin = Math.max(...tagMargins);
+        sellingPrice = basePrice + (basePrice * maxMargin) / 100;
+      }
 
-      // Calculate final price after discount
       const discountPercent = product.discount || 0;
-      const finalPrice =
-        quantity *
-        (priceWithProfit - (priceWithProfit * discountPercent) / 100);
 
-      const productIndex = cart.cart_products.findIndex(
+      const discountedPrice =
+        sellingPrice - (sellingPrice * discountPercent) / 100;
+
+      const unitFinalPrice = discountedPrice * quantity;
+
+      const productIndex = newCartProducts.findIndex(
         (item) => item.product.toString() === productId
       );
 
       if (productIndex !== -1) {
         if (quantity === 0) {
-          cart.cart_products.splice(productIndex, 1);
+          newCartProducts.splice(productIndex, 1);
         } else {
-          cart.cart_products[productIndex].quantity = quantity;
-          cart.cart_products[productIndex].final_price = finalPrice;
-          cart.cart_products[productIndex].weight = product.weight;
-          cart.cart_products[productIndex].unit = product.unit;
+          newCartProducts[productIndex].quantity = quantity;
+          newCartProducts[productIndex].unit_price = parseFloat(
+            sellingPrice.toFixed(2)
+          );
+          newCartProducts[productIndex].discounted_unit_price = parseFloat(
+            discountedPrice.toFixed(2)
+          );
+          newCartProducts[productIndex].final_price = parseFloat(
+            unitFinalPrice.toFixed(2)
+          );
+          newCartProducts[productIndex].weight = product.weight;
+          newCartProducts[productIndex].unit = product.unit;
+          newCartProducts[productIndex].discountAmount = parseFloat(
+            ((sellingPrice - discountedPrice) * quantity).toFixed(2)
+          );
         }
       } else {
         if (quantity > 0) {
-          cart.cart_products.push({
+          newCartProducts.push({
             product: productId,
             quantity,
-            final_price: finalPrice,
+            unit_price: parseFloat(sellingPrice.toFixed(2)),
+            discounted_price: parseFloat(discountedPrice.toFixed(2)),
+            final_price: parseFloat(unitFinalPrice.toFixed(2)),
             weight: product.weight,
             unit: product.unit,
+            discountAmount: parseFloat(
+              ((sellingPrice - discountedPrice) * quantity).toFixed(2)
+            ),
           });
         }
       }
     }
 
-    // Populate product + nested references
-    await cart.populate({
+    const sub_total = newCartProducts.reduce((sum, item) => {
+      const unitPrice = Number(item.unit_price) || 0;
+      const quantity = Number(item.quantity) || 0;
+      return sum + unitPrice * quantity;
+    }, 0);
+
+    const discount = newCartProducts.reduce((sum, item) => {
+      return sum + (Number(item.discountAmount) || 0);
+    }, 0);
+
+    let grand_total = newCartProducts.reduce((sum, item) => {
+      return sum + (Number(item.final_price) || 0);
+    }, 0);
+
+    grand_total += delivery_charge + platform_fee;
+
+    const updatedCart = await Cart.findOneAndUpdate(
+      { deviceId },
+      {
+        $set: {
+          cart_products: newCartProducts,
+          sub_total,
+          discount,
+          grand_total,
+        },
+      },
+      { new: true, upsert: true }
+    ).populate({
       path: "cart_products.product",
       populate: [
-        { path: "brand" },
-        { path: "materials" },
-        { path: "categories" },
-        { path: "colors" },
+        { path: "brand", select: "name" },
+        { path: "materials", select: "name" },
+        { path: "categories", select: "name slug" },
+        { path: "colors", select: "name" },
+        { path: "tags", select: "name margin" },
       ],
     });
 
-    // Recalculate totals with profit margin included
-    cart.sub_total = cart.cart_products.reduce((sum, item) => {
-      const prod = item.product;
-      if (!prod) return sum;
-
-      const isProfitApplied = prod.categories.some((cat) =>
-        profitCategoryIds.includes(cat._id.toString())
-      );
-
-      const basePrice = prod.price;
-      const priceWithProfit = isProfitApplied
-        ? parseFloat((basePrice + (basePrice * profitMargin) / 100).toFixed(2))
-        : basePrice;
-
-      return sum + priceWithProfit * item.quantity;
-    }, 0);
-
-    cart.discount = cart.cart_products.reduce((sum, item) => {
-      const prod = item.product;
-      if (!prod) return sum;
-
-      const isProfitApplied = prod.categories.some((cat) =>
-        profitCategoryIds.includes(cat._id.toString())
-      );
-
-      const basePrice = prod.price;
-      const priceWithProfit = isProfitApplied
-        ? parseFloat((basePrice + (basePrice * profitMargin) / 100).toFixed(2))
-        : basePrice;
-
-      const discountAmount =
-        priceWithProfit - priceWithProfit * ((prod.discount || 0) / 100);
-      return sum + discountAmount * item.quantity;
-    }, 0);
-
-    cart.grand_total = cart.cart_products.reduce(
-      (sum, item) => sum + item.final_price,
-      0
-    );
-
-    await cart.save();
-
-    res.json({
+    return res.json({
       message: "Cart updated",
       cart: {
-        deviceId: cart.deviceId,
-        cart_products: cart.cart_products,
-        sub_total: cart.sub_total,
-        discount: cart.discount,
-        grand_total: cart.grand_total,
+        deviceId: updatedCart.deviceId,
+        cart_products: updatedCart.cart_products,
+        sub_total: parseFloat(sub_total.toFixed(2)),
+        discount: parseFloat(discount.toFixed(2)),
+        grand_total: parseFloat(grand_total.toFixed(2)),
+        delivery_charge,
+        platform_fee,
       },
     });
   } catch (error) {
     console.error("addOrUpdateCart error:", error);
-    res.status(500).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
   }
 };
 
