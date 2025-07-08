@@ -84,8 +84,6 @@ const ProductSchema = new mongoose.Schema(
     },
     ad_pixel_id: { type: String, default: null },
     manufacturer: { type: String },
-
-    // ✅ track who created & updated
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -104,19 +102,21 @@ ProductSchema.pre("save", async function (next) {
     this.stock_id = await generateId();
   }
 
-  if (!this.searchTerms) this.searchTerms = [];
+  if (this.isNew) {
+    if (!this.searchTerms) this.searchTerms = [];
 
-  if (this.name?.en) {
-    const term = this.name.en.toLowerCase();
-    if (!this.searchTerms.includes(term)) {
-      this.searchTerms.push(term);
+    if (this.name?.en) {
+      const term = this.name.en.toLowerCase();
+      if (!this.searchTerms.includes(term)) {
+        this.searchTerms.push(term);
+      }
     }
-  }
 
-  if (this.name?.bn) {
-    const term = this.name.bn.toLowerCase();
-    if (!this.searchTerms.includes(term)) {
-      this.searchTerms.push(term);
+    if (this.name?.bn) {
+      const term = this.name.bn.toLowerCase();
+      if (!this.searchTerms.includes(term)) {
+        this.searchTerms.push(term);
+      }
     }
   }
 
