@@ -7,10 +7,8 @@ const SubCategory = require("../models/SubCategoryModel");
 const Material = require("../models/materialModel");
 const Category = require("../models/categoryModel");
 const Color = require("../models/colorModel");
-const paginate = require("../utils/pagination");
 const cloudinary = require("../config/cloudinary");
 const { applyDiscount } = require("../utils/price");
-const Fuse = require("fuse.js");
 
 const toSlugArray = (value) => {
   if (!value) return [];
@@ -1071,15 +1069,15 @@ const updateProductVisibility = async (req, res) => {
   }
 
   try {
-    const product = await Product.findByIdAndUpdate(
-      id,
-      { is_published },
-      { new: true }
-    );
-
+    const product = await Product.findById(id);
     if (!product) {
       return res.status(404).json({ error: "Product not found." });
     }
+
+    product.is_published = is_published;
+    product.updatedBy = req.user._id;
+
+    await product.save();
 
     res
       .status(200)
@@ -1244,6 +1242,64 @@ const dailyProductLogByUser = async (req, res) => {
   }
 };
 
+const getProductStats = async (req, res) => {
+  try {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const totalCount = await Product.countDocuments();
+    const todayUpdatedCount = await Product.countDocuments({
+      updatedAt: { $gte: todayStart, $lte: todayEnd },
+    });
+    const publishedCount = await Product.countDocuments({ is_published: true });
+    const hasTagCount = await Product.countDocuments({
+      tags: { $exists: true, $not: { $size: 0 } },
+    });
+    const hasSearchTermCount = await Product.countDocuments({
+      searchTerms: { $exists: true, $not: { $size: 0 } },
+    });
+    const hasNameDescCount = await Product.countDocuments({
+      "name.en": { $exists: true, $ne: "" },
+      "name.bn": { $exists: true, $ne: "" },
+      "description.en": { $exists: true, $ne: "" },
+      "description.bn": { $exists: true, $ne: "" },
+    });
+
+    // Get logs for products
+    const productLogs = await ProductLog.find({ refModel: "Product" })
+      .populate("changedBy", "name phone")
+      .sort({ createdAt: -1 });
+
+    const productIds = [
+      ...new Set(productLogs.map((log) => log.refId.toString())),
+    ];
+    const products = await Product.find(
+      { _id: { $in: productIds } },
+      "_id name"
+    );
+
+    const productMap = {};
+    products.forEach((p) => {
+      productMap[p._id.toString()] = p.name;
+    });
+
+    res.status(200).json({
+      totalCount,
+      todayUpdatedCount,
+      publishedCount,
+      hasTagCount,
+      hasSearchTermCount,
+      hasNameDescCount,
+    });
+  } catch (error) {
+    console.error("Error fetching product stats:", error);
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
 module.exports = {
   createProduct,
   publicGetAllProducts,
@@ -1254,4 +1310,5 @@ module.exports = {
   updateProductVisibility,
   deleteProductById,
   dailyProductLogByUser,
+  getProductStats,
 };

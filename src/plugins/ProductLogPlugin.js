@@ -12,21 +12,6 @@ module.exports = function auditLogPlugin(schema, options) {
     });
   }
 
-  function getRefModel(path) {
-    const pathSchema = schema.path(path);
-    if (!pathSchema) return null;
-
-    if (pathSchema.instance === "ObjectID" && pathSchema.options?.ref) {
-      return pathSchema.options.ref;
-    }
-
-    if (pathSchema.instance === "Array" && pathSchema.caster?.options?.ref) {
-      return pathSchema.caster.options.ref;
-    }
-
-    return null;
-  }
-
   function findChanges(original, updated, pathPrefix = "") {
     const changes = [];
 

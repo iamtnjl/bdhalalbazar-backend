@@ -25,6 +25,7 @@ const {
   createProduct,
   updateProduct,
   updateProductVisibility,
+  getProductStats,
   deleteProductById,
 } = require("../controllers/productController");
 
@@ -97,6 +98,7 @@ router.put("/orders/:orderId/edit", editOrderItem);
 //Products API
 router.get("/products", getAllProducts);
 router.get("/products/:productId", getAdminProductDetails);
+router.get("/products-stats", getProductStats);
 router.post(
   "/products",
   upload.fields([
