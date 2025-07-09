@@ -336,6 +336,14 @@ const publicGetAllProducts = async (req, res) => {
             foreignField: "_id",
             as: "colors",
           },
+        },
+        {
+          $lookup: {
+            from: "tags",
+            localField: "tags",
+            foreignField: "_id",
+            as: "tags",
+          },
         }
       );
 
